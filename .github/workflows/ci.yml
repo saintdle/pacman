@@ -1,0 +1,38 @@
+name: ci
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  lint-and-unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+
+  adapter-tests:
+    runs-on: ubuntu-latest
+    needs: lint-and-unit
+    strategy:
+      fail-fast: false
+      matrix:
+        adapter: [mongo, postgres]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: Run ${{ matrix.adapter }} adapter tests (testcontainers)
+        env:
+          RUN_ADAPTER_TESTS: '1'
+        run: node --test --test-reporter=spec test/adapters/${{ matrix.adapter }}.test.js

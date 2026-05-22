@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package pacman;
+
+service ScoreService {
+  rpc SubmitScore (SubmitScoreRequest) returns (SubmitScoreResponse);
+  rpc ListScores (ListScoresRequest) returns (ListScoresResponse);
+}
+
+message SubmitScoreRequest {
+  string name = 1;
+  string cloud = 2;
+  string zone = 3;
+  string host = 4;
+  int32 score = 5;
+  int32 level = 6;
+}
+
+message SubmitScoreResponse {
+  string rs = 1;
+  string name = 2;
+  string zone = 3;
+  int32 score = 4;
+  int32 level = 5;
+}
+
+message ListScoresRequest {
+  int32 limit = 1;
+}
+
+message ScoreRecord {
+  string name = 1;
+  string cloud = 2;
+  string zone = 3;
+  string host = 4;
+  int32 score = 5;
+}
+
+message ListScoresResponse {
+  repeated ScoreRecord scores = 1;
+}

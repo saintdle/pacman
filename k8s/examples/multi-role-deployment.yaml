@@ -1,0 +1,211 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pacman-demo
+  labels:
+    app.kubernetes.io/part-of: pacman
+---
+# --- Web role: serves the browser UI, forwards score/user to backend Services ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pacman-web
+  namespace: pacman-demo
+  labels:
+    app: pacman
+    role: web
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: pacman
+      role: web
+  template:
+    metadata:
+      labels:
+        app: pacman
+        role: web
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        - name: pacman
+          image: docker.io/saintdle/pacman:latest
+          ports:
+            - containerPort: 8080
+              name: http
+          envFrom:
+            - configMapRef:
+                name: pacman-game-config
+          env:
+            - name: APP_ROLE
+              value: "web"
+            - name: SCORE_SERVICE_URL
+              value: "http://pacman-score.pacman-demo.svc:8080"
+            - name: USER_SERVICE_URL
+              value: "http://pacman-user.pacman-demo.svc:8080"
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pacman-web
+  namespace: pacman-demo
+  labels:
+    app: pacman
+    role: web
+spec:
+  selector:
+    app: pacman
+    role: web
+  ports:
+    - port: 8080
+      targetPort: http
+      name: http
+---
+# --- Score role: handles highscore read/write ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pacman-score
+  namespace: pacman-demo
+  labels:
+    app: pacman
+    role: score
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pacman
+      role: score
+  template:
+    metadata:
+      labels:
+        app: pacman
+        role: score
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        - name: pacman
+          image: docker.io/saintdle/pacman:latest
+          ports:
+            - containerPort: 8080
+              name: http
+          envFrom:
+            - configMapRef:
+                name: pacman-game-config
+          env:
+            - name: APP_ROLE
+              value: "score"
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pacman-score
+  namespace: pacman-demo
+  labels:
+    app: pacman
+    role: score
+spec:
+  selector:
+    app: pacman
+    role: score
+  ports:
+    - port: 8080
+      targetPort: http
+      name: http
+---
+# --- User role: handles user sessions and stats ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pacman-user
+  namespace: pacman-demo
+  labels:
+    app: pacman
+    role: user
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pacman
+      role: user
+  template:
+    metadata:
+      labels:
+        app: pacman
+        role: user
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        - name: pacman
+          image: docker.io/saintdle/pacman:latest
+          ports:
+            - containerPort: 8080
+              name: http
+          envFrom:
+            - configMapRef:
+                name: pacman-game-config
+          env:
+            - name: APP_ROLE
+              value: "user"
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pacman-user
+  namespace: pacman-demo
+  labels:
+    app: pacman
+    role: user
+spec:
+  selector:
+    app: pacman
+    role: user
+  ports:
+    - port: 8080
+      targetPort: http
+      name: http

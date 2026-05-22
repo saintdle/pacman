@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pacman-game-config
+  namespace: pacman-demo
+data:
+  MAX_LEVEL: "10"
+  ALLOW_CLIENT_CONFIG_OVERRIDE: "false"
+  EBEE_MODE: "true"
+  ALLOW_CLIENT_EBEE_MODE_OVERRIDE: "false"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pacman
+spec:
+  template:
+    metadata:
+      annotations:
+        pacman.font.github.com/config-rollout: "ebee-mode-enabled"

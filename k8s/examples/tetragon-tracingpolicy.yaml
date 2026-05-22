@@ -1,0 +1,56 @@
+# Tetragon TracingPolicy for Pac-Man demo incident probes.
+#
+# Traces the exec and file-read operations triggered by the demo incident
+# endpoints (POST /demo/incidents/exec-probe and POST /demo/incidents/file-probe).
+# Useful for demonstrating Tetragon's runtime security observability alongside
+# Cilium network policies.
+---
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicy
+metadata:
+  name: pacman-demo-file-access
+spec:
+  kprobes:
+    - call: fd_install
+      syscall: false
+      args:
+        - index: 0
+          type: int
+        - index: 1
+          type: "file"
+      selectors:
+        - matchArgs:
+            - index: 1
+              operator: Prefix
+              values:
+                - "/etc/hostname"
+                - "/etc/passwd"
+                - "/etc/shadow"
+                - "/proc/self"
+          matchNamespaces:
+            - namespace: Mnt
+              operator: NotIn
+              values:
+                - "host_mnt_ns"
+---
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicy
+metadata:
+  name: pacman-demo-process-exec
+spec:
+  tracepoints:
+    - subsystem: sched
+      event: sched_process_exec
+      args:
+        - index: 0
+          type: nop
+      selectors:
+        - matchNamespaces:
+            - namespace: Mnt
+              operator: NotIn
+              values:
+                - "host_mnt_ns"
+          matchBinaries:
+            - operator: In
+              values:
+                - "/usr/local/bin/node"

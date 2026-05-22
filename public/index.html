@@ -1,7 +1,6 @@
 <!DOCTYPE html>
 
-<!--<html lang="en">-->
-<html lang="en" manifest="cache.manifest">
+<html lang="en">
 <head>
     <meta charset="utf-8" />
     <title>Pac-Man</title>
@@ -158,11 +157,71 @@
             <h3>Pills</h3>
             <p>The goal of every level is, to eat all the white pills without getting catched by the ghosts. One pill results in 10 points.</p>
             <h3>Powerpills</h3>
-            <p>In every level there are 4 powerpills, which are a bit bigger than the regular ones. If Pac-Man eats those, he will get strong enough to eat the ghosts. You can see this indicated by the ghosts turning blue. One powerpill results in 50 points.</p>
+            <p id="powerpill-instructions">In every level there are 4 powerpills, which are a bit bigger than the regular ones. If Pac-Man eats those, he will get strong enough to eat the ghosts. You can see this indicated by the ghosts turning blue. One powerpill results in 50 points.</p>
             <img src="img/instructions/instructions_powerpill.PNG">
-            <p>Eating a ghost results in 100 points. The soul of the ghost will return to the ghost house before starting to chase Pac-Man again.</p>
+            <p id="ghost-instructions">Eating a ghost results in 100 points. The soul of the ghost will return to the ghost house before starting to chase Pac-Man again.</p>
         </div>
 
+    </div>
+</div>
+
+<!-- Settings -->
+<div class="content" id="settings-content">
+    <div class="button" id="back">&lt; back</div>
+    <div>
+        <h1>Settings</h1>
+        <p>The server is currently configured with a maximum level of
+           <strong><span id="server-max-level">…</span></strong>.
+           You can override this locally to play more or fewer levels, but
+           the server still validates high score submissions against its own
+           limit and will reject scores that exceed it.</p>
+        <p id="settings-locked-notice" style="display:none; color:#ffcc00;">
+           <strong>This server does not allow client config changes.</strong>
+           Settings are read-only.
+        </p>
+        <form id="settings-form" onsubmit="return false;">
+            <fieldset>
+                <legend>Gameplay <span class="settings-badge" id="max-level-lock-badge">Server controlled</span></legend>
+                <label>
+                    <input class="server-config-control" type="radio" name="maxLevelMode" value="server" checked>
+                    Use server default
+                </label><br>
+                <label>
+                    <input class="server-config-control" type="radio" name="maxLevelMode" value="custom">
+                    Custom:
+                    <input class="server-config-control" type="number" id="maxLevelCustom" min="1" max="999" value="10">
+                </label><br>
+                <label>
+                    <input class="server-config-control" type="radio" name="maxLevelMode" value="unlimited">
+                    Unlimited
+                </label>
+            </fieldset>
+            <fieldset>
+                <legend>Theme <span class="settings-badge" id="ebee-mode-lock-badge">Server controlled</span></legend>
+                <p id="ebee-mode-locked-notice" style="display:none; color:#ffcc00;">
+                   This server controls eBee mode.
+                </p>
+                <label>
+                    <input type="checkbox" id="ebeeMode">
+                    eBee mode
+                </label>
+                <div class="theme-preview" aria-hidden="true">
+                    <div class="preview-ebee"><span></span></div>
+                    <div class="preview-flower"><span></span></div>
+                    <img src="img/cilium-light.svg" alt="">
+                    <img src="img/kubernetes.svg" alt="">
+                </div>
+            </fieldset>
+            <fieldset>
+                <legend>Server Config</legend>
+                <pre id="server-config-json">Loading…</pre>
+            </fieldset>
+            <p>
+                <span class="button" id="settings-save">Save</span>
+                <span class="button" id="settings-reset">Reset</span>
+            </p>
+            <p id="settings-status"></p>
+        </form>
     </div>
 </div>
 
@@ -171,10 +230,13 @@
     <div class="button" id="back">&lt; back</div>
     <div>
         <h1>Info</h1>
-        <p>Current Version: 1.02 (05.02.2018)</p>
-        <img src="img/platzh1rsch-logo.png">
-        <p>Pac-Man is Open Source, originally written by <a href="http://platzh1rsch.ch">platzh1rsch</a> and modified by <a href="http://ivanfont.com">Ivan Font</a>. You can get the original code <a target="_blank" href="https://github.com/platzhersh/pacman-canvas">here</a> or this modified version <a target="_blank" href="https://github.com/font/pacman">here</a>.</p>
-        <p>If you have any suggestions how to make this app better, please file an issue on the github repo.</p>
+        <p>Current Version: Kubernetes-ready refresh</p>
+        <img src="img/8bit-ctf-bee.png" alt="8-bit eBee">
+        <p>Pac-Man is open source, originally written by <a href="http://platzh1rsch.ch">platzh1rsch</a> as <a target="_blank" href="https://github.com/platzhersh/pacman-canvas">platzhersh/pacman-canvas</a>.</p>
+        <p>The original Node.js app was later created by <a href="http://ivanfont.com">Ivan Font</a> at <a target="_blank" href="https://github.com/font/pacman">font/pacman</a>.</p>
+        <p>This build of the app comes from <a target="_blank" href="https://github.com/saintdle/pacman">saintdle/pacman</a>.</p>
+        <p id="kubernetes-usage-info" style="display: none;">Lightweight Kubernetes examples ship in this repo under <code>k8s/examples/</code>. An extended deployment with persistent storage and Cilium demos lives at <a target="_blank" href="https://github.com/saintdle/pacman-for-k8s">saintdle/pacman-for-k8s</a>.</p>
+        <p>This version updates the app for modern Node.js, containers, Kubernetes config, score validation, and eBee mode.</p>
         <p>
     </div>
 </div>
@@ -233,11 +295,14 @@
         <div class="controls" id="menu-buttons">
             <ul>
                 <li class="button" id="newGame">New Game</li>
+                <li class="button" id="restartLevel">Restart Level</li>
                 <li class="button" id="highscore">High Score</li>
                 <li class="button" id="livestats">Live Stats</li>
                 <li class="button" id="instructions">Instructions</li>
+                <li class="button" id="settings">Settings</li>
                 <li class="button" id="info">Info</li>
             </ul>
+            <p class="keyboard-hints nomobile">Arrows/WASD move | Space pauses | R restarts level | N starts over | M toggles sound</p>
 
         </div>
         <!-- Game Menu End -->

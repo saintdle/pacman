@@ -1,0 +1,12 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pacman
+spec:
+  template:
+    spec:
+      containers:
+        - name: pacman
+          envFrom:
+            - configMapRef:
+                name: pacman-game-config

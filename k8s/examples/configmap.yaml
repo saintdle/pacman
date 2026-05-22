@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pacman-game-config
+  namespace: pacman-demo
+data:
+  MAX_LEVEL: "10"
+  ALLOW_CLIENT_CONFIG_OVERRIDE: "false"
+  EBEE_MODE: "true"
+  ALLOW_CLIENT_EBEE_MODE_OVERRIDE: "false"
+  APP_VERSION: "2.0.0"
+  APP_VARIANT: "stable"
+  APP_COLOR: "#ffcc00"
+  DEMO_SECURITY_MODE: "true"
+  DEMO_TOKEN_HEADER: "x-demo-token"
+  DEMO_TOKEN: "pacman-demo"

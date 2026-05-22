@@ -13,6 +13,19 @@
 
 "use strict";
 
+// global constants ported from upstream platzhersh/pacman-canvas v1.0.2 / v1.0.5
+// FINAL_LEVEL is the *fallback* used until /config is fetched. The runtime value
+// lives on `game.maxLevel` and may be a positive integer or the string 'unlimited'.
+const FINAL_LEVEL = 10;
+const PILL_POINTS = 10;
+const POWERPILL_POINTS = 50;
+const GHOST_POINTS = 100;
+const HIGHSCORE_ENABLED = true;
+const MAX_LEVEL_STORAGE_KEY = 'pacman.maxLevel';
+const EBEE_MODE_STORAGE_KEY = 'pacman.ebeeMode';
+const CILIUM_LOGO_SRC = 'img/cilium-light.svg';
+const KUBERNETES_LOGO_SRC = 'img/kubernetes.svg';
+
 function geronimo() {
 /* ----- Global Variables ---------------------------------------- */
     var canvas;
@@ -94,8 +107,17 @@ function geronimo() {
                 console.log('Highscore added: ' + data);
                 $('#highscore-form').html('<span class="button" id="show-highscore">View Highscore List</span>');
             },
-            error: function(errorThrown) {
-                console.log(errorThrown);
+            error: function(xhr) {
+                var msg = 'The server rejected this score.';
+                try {
+                    var body = xhr.responseJSON || JSON.parse(xhr.responseText);
+                    if (body && body.error) msg = 'The server rejected this score: ' + body.error + '.';
+                } catch (e) { /* keep default */ }
+                if (game.serverMaxLevel !== 'unlimited' && game.level > game.serverMaxLevel) {
+                    msg += ' You are playing beyond the server max level, so this run is local play only.';
+                }
+                console.log(xhr);
+                $('#highscore-form').html('<div id="server-score-rejected">' + msg + '<br><span class="button" id="show-highscore">View Highscore List</span></div>');
             }
         });
     }
@@ -113,6 +135,7 @@ function geronimo() {
                 game.zone = msg['zone'];
                 $(".host").append("<b>" + msg['host'] + "</b>");
                 game.host = msg['host'];
+                updateKubernetesUsageInfo();
             },
             error: function() {
                 $(".cloudprovider").append("<b>unknown</b>");
@@ -121,8 +144,15 @@ function geronimo() {
                 game.zone = 'unknown';
                 $(".host").append("<b>unknown</b>");
                 game.host = 'unknown';
+                updateKubernetesUsageInfo();
             }
         });
+    }
+
+    function updateKubernetesUsageInfo() {
+        var hasCloud = game.cloudProvider && game.cloudProvider !== 'unknown';
+        var hasZone = game.zone && game.zone !== 'unknown';
+        $('#kubernetes-usage-info').toggle(!!(hasCloud && hasZone));
     }
 
     function ajaxGetUserId() {
@@ -173,6 +203,257 @@ function geronimo() {
 
     function getCloudMetadata() {
         setTimeout(ajaxGetCloudMetadata, 30);
+    }
+
+    /* ---------- Server / user configuration ----------------------------- */
+
+    // Read the user's max-level override from localStorage, if any.
+    // Returns a positive integer, the string 'unlimited', or null when unset.
+    function readUserMaxLevelOverride() {
+        try {
+            var raw = window.localStorage && window.localStorage.getItem(MAX_LEVEL_STORAGE_KEY);
+            if (raw === null || raw === undefined || raw === '') return null;
+            if (raw === 'unlimited') return 'unlimited';
+            var n = parseInt(raw, 10);
+            return (Number.isInteger(n) && n >= 1) ? n : null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function writeUserMaxLevelOverride(value) {
+        try {
+            if (value === null || value === undefined) {
+                window.localStorage.removeItem(MAX_LEVEL_STORAGE_KEY);
+            } else {
+                window.localStorage.setItem(MAX_LEVEL_STORAGE_KEY, String(value));
+            }
+        } catch (e) {
+            console.warn('localStorage unavailable, settings will not persist', e);
+        }
+    }
+
+    function readEbeeModeOverride() {
+        try {
+            var raw = window.localStorage && window.localStorage.getItem(EBEE_MODE_STORAGE_KEY);
+            if (raw === 'true') return true;
+            if (raw === 'false') return false;
+            return null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function writeEbeeMode(enabled) {
+        try {
+            window.localStorage.setItem(EBEE_MODE_STORAGE_KEY, enabled ? 'true' : 'false');
+        } catch (e) {
+            console.warn('localStorage unavailable, eBee mode will not persist', e);
+        }
+    }
+
+    function applyEbeeMode() {
+        var override = game.allowEbeeModeOverride ? readEbeeModeOverride() : null;
+        game.ebeeMode = override === null ? game.serverEbeeMode : override;
+        renderThemeCopy();
+        if (typeof game.drawHearts === 'function' && typeof pacman !== 'undefined' && pacman.lives !== undefined) {
+            game.drawHearts(pacman.lives);
+        }
+    }
+
+    function renderThemeCopy() {
+        if (game.ebeeMode) {
+            $('#powerpill-instructions').text('In every level there are 4 Cilium power pills, shown with the Cilium logo. If eBee collects one, the flowers turn blue and can be picked for 100 points while the effect lasts. One Cilium power pill results in 50 points.');
+            $('#ghost-instructions').text('Picking a blue flower results in 100 points. Its returning eyes travel back to the flower house before it starts chasing eBee again.');
+        } else {
+            $('#powerpill-instructions').text('In every level there are 4 powerpills, which are a bit bigger than the regular ones. If Pac-Man eats those, he will get strong enough to eat the ghosts. You can see this indicated by the ghosts turning blue. One powerpill results in 50 points.');
+            $('#ghost-instructions').text('Eating a ghost results in 100 points. The soul of the ghost will return to the ghost house before starting to chase Pac-Man again.');
+        }
+    }
+
+    // Recompute game.maxLevel from server default + user override.
+    // When the server forbids overrides we ignore any value still sitting in
+    // localStorage from a previous, more permissive deployment.
+    function applyMaxLevel() {
+        var override = game.allowClientOverride ? readUserMaxLevelOverride() : null;
+        game.maxLevel = (override !== null) ? override : game.serverMaxLevel;
+        console.log('applyMaxLevel:', { server: game.serverMaxLevel, override: override, effective: game.maxLevel, allowOverride: game.allowClientOverride });
+    }
+
+    // Fetch the server's gameplay config (currently just maxLevel) and apply it.
+    function fetchServerConfig() {
+        $.ajax({
+            datatype: 'json',
+            type: 'GET',
+            url: 'config',
+            success: function (msg) {
+                if (msg && (typeof msg.maxLevel === 'number' || msg.maxLevel === 'unlimited')) {
+                    game.serverMaxLevel = msg.maxLevel;
+                }
+                if (msg && typeof msg.allowClientOverride === 'boolean') {
+                    game.allowClientOverride = msg.allowClientOverride;
+                }
+                if (msg && typeof msg.ebeeMode === 'boolean') {
+                    game.serverEbeeMode = msg.ebeeMode;
+                }
+                if (msg && typeof msg.allowEbeeModeOverride === 'boolean') {
+                    game.allowEbeeModeOverride = msg.allowEbeeModeOverride;
+                }
+                if (msg && msg.appRole) game.appRole = msg.appRole;
+                if (msg && msg.appVersion) game.appVersion = msg.appVersion;
+                if (msg && msg.appVariant) game.appVariant = msg.appVariant;
+                if (msg && msg.appColor) game.appColor = msg.appColor;
+                applyEbeeMode();
+                applyMaxLevel();
+                if ($('#settings-content').is(':visible')) {
+                    renderSettingsForm();
+                }
+            },
+            error: function (err) {
+                console.warn('failed to fetch /config, using fallback maxLevel', err);
+            }
+        });
+    }
+
+    // Populate the Settings form with current values when the panel is shown.
+    function renderSettingsForm() {
+        var server = game.serverMaxLevel;
+        var override = readUserMaxLevelOverride();
+        $('#server-max-level').text(server === 'unlimited' ? 'unlimited' : server);
+
+        // Lock only gameplay config controls when the server forbids client overrides.
+        // Cosmetic options like eBee mode remain local-only and editable.
+        var locked = !game.allowClientOverride;
+        var ebeeLocked = !game.allowEbeeModeOverride;
+        $('#settings-locked-notice').toggle(locked);
+        $('.server-config-control').prop('disabled', locked);
+        $('#ebeeMode').prop('disabled', ebeeLocked);
+        $('#ebee-mode-locked-notice').toggle(ebeeLocked);
+        $('#max-level-lock-badge').toggle(locked);
+        $('#ebee-mode-lock-badge').toggle(ebeeLocked);
+
+        var mode, custom;
+        if (override === null || locked) {
+            mode = 'server';
+            custom = (typeof server === 'number') ? server : 10;
+        } else if (override === 'unlimited') {
+            mode = 'unlimited';
+            custom = 10;
+        } else {
+            mode = 'custom';
+            custom = override;
+        }
+        $('input[name="maxLevelMode"][value="' + mode + '"]').prop('checked', true);
+        $('#maxLevelCustom').val(custom);
+        $('#ebeeMode').prop('checked', game.ebeeMode);
+        $('#server-config-json').text(JSON.stringify({
+            maxLevel: game.serverMaxLevel,
+            allowClientOverride: game.allowClientOverride,
+            ebeeMode: game.serverEbeeMode,
+            allowEbeeModeOverride: game.allowEbeeModeOverride,
+            effectiveMaxLevel: game.maxLevel,
+            effectiveEbeeMode: game.ebeeMode,
+            appRole: game.appRole,
+            appVersion: game.appVersion,
+            appVariant: game.appVariant
+        }, null, 2));
+        $('#settings-status').text('');
+    }
+
+    function drawBlock(context, x, y, w, h, color) {
+        context.fillStyle = color;
+        context.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
+    }
+
+    function drawEbee(context, bee) {
+        var unit = bee.radius / 8;
+        var centerX = bee.posX + bee.radius;
+        var centerY = bee.posY + bee.radius;
+        var facing = bee.dirX < 0 ? -1 : 1;
+        var wingBeat = bee.mouth > 0 ? -1 : 1;
+        var bob = (bee.beastModeTimer % 8 < 4) ? -unit : 0;
+
+        context.save();
+        context.translate(centerX, centerY + bob);
+        if (bee.dirY === -1) context.rotate(-Math.PI / 2);
+        else if (bee.dirY === 1) context.rotate(Math.PI / 2);
+        else if (facing === -1) context.scale(-1, 1);
+
+        // Wings flap instead of Pac-Man's mouth opening and closing.
+        drawBlock(context, -7 * unit, (-6 + wingBeat) * unit, 4 * unit, 3 * unit, '#bff3ff');
+        drawBlock(context, -7 * unit, (3 - wingBeat) * unit, 4 * unit, 3 * unit, '#bff3ff');
+        drawBlock(context, -6 * unit, (-5 + wingBeat) * unit, 2 * unit, unit, '#ffffff');
+        drawBlock(context, -6 * unit, (4 - wingBeat) * unit, 2 * unit, unit, '#ffffff');
+
+        // 8-bit eBee body, inspired by the eBeeDex 8-bit CTF bee but without the flag.
+        drawBlock(context, -5 * unit, -5 * unit, 9 * unit, 10 * unit, '#f6c915');
+        drawBlock(context, -3 * unit, -5 * unit, 2 * unit, 10 * unit, '#161616');
+        drawBlock(context, unit, -5 * unit, 2 * unit, 10 * unit, '#161616');
+        drawBlock(context, 4 * unit, -3 * unit, 2 * unit, 6 * unit, '#f6c915');
+        drawBlock(context, 5 * unit, -2 * unit, unit, 4 * unit, '#161616');
+        drawBlock(context, -6 * unit, -4 * unit, unit, 8 * unit, '#161616');
+
+        // Face, eye, antennae, and a tiny Cilium-blue pixel accent.
+        drawBlock(context, 5 * unit, -5 * unit, 2 * unit, 2 * unit, '#f6c915');
+        drawBlock(context, 6 * unit, -4 * unit, unit, unit, '#161616');
+        drawBlock(context, 4 * unit, -7 * unit, unit, 2 * unit, '#161616');
+        drawBlock(context, 6 * unit, -7 * unit, unit, 2 * unit, '#161616');
+        drawBlock(context, 3 * unit, 3 * unit, unit, unit, '#00a6d6');
+        context.restore();
+    }
+
+    function drawFlower(context, ghost) {
+        var unit = ghost.radius / 7;
+        var centerX = ghost.posX + ghost.radius;
+        var centerY = ghost.posY + ghost.radius;
+
+        if (ghost.dead) {
+            context.save();
+            // Eaten flowers collapse into a small pair of returning eyes,
+            // matching the original dead-ghost behaviour visually.
+            drawBlock(context, centerX - 5 * unit, centerY - 2 * unit, 4 * unit, 4 * unit, '#ffffff');
+            drawBlock(context, centerX + unit, centerY - 2 * unit, 4 * unit, 4 * unit, '#ffffff');
+            drawBlock(context, centerX - 3 * unit, centerY - unit, unit, 2 * unit, '#326ce5');
+            drawBlock(context, centerX + 3 * unit, centerY - unit, unit, 2 * unit, '#326ce5');
+            drawBlock(context, centerX - unit, centerY + 3 * unit, 2 * unit, 3 * unit, '#7bd88f');
+            context.restore();
+            return;
+        }
+
+        var colors = {
+            blinky: '#ff4d6d',
+            pinky: '#ff8bd1',
+            inky: '#40d6ff',
+            clyde: '#ffb347'
+        };
+        var normalPetal = colors[ghost.name] || '#ff8bd1';
+        var flickerToNormal = ghost.dazzled && pacman.beastModeTimer < 50 && pacman.beastModeTimer % 8 > 1;
+        var petal = (ghost.dazzled && !flickerToNormal) ? '#2f80ff' : normalPetal;
+        var center = (ghost.dazzled && !flickerToNormal) ? '#4a90e2' : '#ffea00';
+        var stem = '#36b24a';
+
+        context.save();
+        drawBlock(context, centerX - unit, centerY + 3 * unit, 2 * unit, 5 * unit, stem);
+        drawBlock(context, centerX - 4 * unit, centerY + 5 * unit, 3 * unit, 2 * unit, stem);
+        drawBlock(context, centerX + unit, centerY + 4 * unit, 3 * unit, 2 * unit, stem);
+
+        drawBlock(context, centerX - 2 * unit, centerY - 7 * unit, 4 * unit, 4 * unit, petal);
+        drawBlock(context, centerX - 7 * unit, centerY - 2 * unit, 4 * unit, 4 * unit, petal);
+        drawBlock(context, centerX + 3 * unit, centerY - 2 * unit, 4 * unit, 4 * unit, petal);
+        drawBlock(context, centerX - 2 * unit, centerY + 3 * unit, 4 * unit, 4 * unit, petal);
+        drawBlock(context, centerX - 4 * unit, centerY - 4 * unit, 3 * unit, 3 * unit, petal);
+        drawBlock(context, centerX + unit, centerY - 4 * unit, 3 * unit, 3 * unit, petal);
+        drawBlock(context, centerX - 4 * unit, centerY + unit, 3 * unit, 3 * unit, petal);
+        drawBlock(context, centerX + unit, centerY + unit, 3 * unit, 3 * unit, petal);
+
+        drawBlock(context, centerX - 2 * unit, centerY - 2 * unit, 4 * unit, 4 * unit, center);
+        drawBlock(context, centerX - unit, centerY - unit, unit, unit, '#161616');
+        drawBlock(context, centerX + unit, centerY - unit, unit, unit, '#161616');
+        context.restore();
+    }
+
+    function drawCiliumPill(context, centerX, centerY, size) {
+        context.drawImage(game.ciliumLogo, centerX - size / 2, centerY - size / 2, size, size);
     }
 
     function updateUserStats() {
@@ -284,10 +565,27 @@ function geronimo() {
         this.pillCount;                // number of pills
         this.monsters;
         this.level = 1;
+        // Maximum level cap. Updated at runtime from GET /config and any saved
+        // user override (see settings panel). May be a positive integer or 'unlimited'.
+        this.maxLevel = FINAL_LEVEL;
+        this.serverMaxLevel = FINAL_LEVEL;
+        this.allowClientOverride = true;
+        this.serverEbeeMode = false;
+        this.allowEbeeModeOverride = true;
+        this.ebeeMode = false;
+        this.appRole = 'web';
+        this.appVersion = 'dev';
+        this.appVariant = 'stable';
+        this.appColor = '#ffcc00';
+        this.ciliumLogo = new Image();
+        this.ciliumLogo.src = CILIUM_LOGO_SRC;
+        this.kubernetesLogo = new Image();
+        this.kubernetesLogo.src = KUBERNETES_LOGO_SRC;
         this.refreshLevel = function(h) {
             $(h).html("Level: "+this.level);
         };
         this.gameOver = false;
+        this.allLevelsCompleted = false;
         this.canvas = $("#myCanvas").get(0);
         this.wallColor = "Blue";
         this.width = this.canvas.width;
@@ -396,7 +694,26 @@ function geronimo() {
             }
         };
 
+        this.restartLevel = function() {
+            var r = confirm("Restart the current level?");
+            if (r) {
+                console.log("restart level " + this.level);
+                this.pause = true;
+                this.gameOver = false;
+                this.init(1);
+                this.showMessage("Level " + this.level, this.getLevelTitle() + "<br/>(Click to continue!)");
+            }
+        };
+
         this.nextLevel = function() {
+            // Upstream v1.0.2/v1.0.5: cap the game at maxLevel and trigger end-game flow.
+            // When maxLevel === 'unlimited' the game keeps progressing forever.
+            if (this.maxLevel !== 'unlimited' && this.level >= this.maxLevel) {
+                console.log('next level, ' + this.maxLevel + ', end game');
+                game.endGame(true);
+                game.showHighscoreForm();
+                return;
+            }
             this.level++;
             console.log("Level "+game.level);
             game.showMessage("Level "+game.level, this.getLevelTitle() + "<br/>(Click to continue!)");
@@ -406,8 +723,9 @@ function geronimo() {
 
         this.drawHearts = function (count) {
             var html = "";
+            var icon = game.ebeeMode ? KUBERNETES_LOGO_SRC : 'img/heart.png';
             for (var i = 0; i<count; i++) {
-                html += " <img src='img/heart.png'>";
+                html += " <img src='" + icon + "'>";
                 }
             $(".lives").html("Lives: "+html);
 
@@ -419,6 +737,26 @@ function geronimo() {
         };
 
         this.getLevelTitle = function() {
+            if (this.ebeeMode) {
+                if (this.maxLevel !== 'unlimited' && this.level === this.maxLevel) {
+                    return '"final flower field"';
+                }
+                switch (this.level) {
+                    case 1:
+                        return '"first flight"';
+                    case 2:
+                        return '"pollen patrol"';
+                    case 3:
+                        return '"flower chase"';
+                    case 4:
+                        return '"hive traffic"';
+                    case 5:
+                        return '"cilium bloom"';
+                    default:
+                        return '"keep buzzing"';
+                }
+            }
+
             switch(this.level) {
                 case 2:
                     return '"The chase begins"';
@@ -445,9 +783,50 @@ function geronimo() {
                     return '"ghosts on speed"';
                     // TODO: Ghosts get even faster for this level
                 default:
+                    // "The final chase" once we hit the configured cap (if finite).
+                    if (this.maxLevel !== 'unlimited' && this.level === this.maxLevel) {
+                        return '"The final chase"';
+                    }
                     return '"nothing new"';
             }
         }
+
+        // Upstream v1.0.2: client-side score sanity check. Max points per level is
+        //   104 pills + 4 powerpills + 4 ghosts in beast mode
+        // If score/level exceeds that, the score is rejected as fake.
+        this.validateScoreWithLevel = function () {
+            const maxLevelPointsPills = 104 * PILL_POINTS;
+            const maxLevelPointsPowerpills = 4 * POWERPILL_POINTS;
+            const maxLevelPointsGhosts = 4 * 4 * GHOST_POINTS;
+            const maxLevelPoints = maxLevelPointsPills + maxLevelPointsPowerpills + maxLevelPointsGhosts;
+            const scoreIsValid = this.score.score / this.level <= maxLevelPoints;
+            console.log('validate score. score: ' + this.score.score + ', level: ' + this.level, scoreIsValid);
+            return scoreIsValid;
+        };
+
+        // Upstream v1.0.5: explicit end-game state transition.
+        this.endGame = function (allLevelsCompleted) {
+            allLevelsCompleted = !!allLevelsCompleted;
+            console.log('Game Over by ' + (allLevelsCompleted ? 'WIN' : 'LOSS'));
+            this.pause = true;
+            this.gameOver = true;
+            this.allLevelsCompleted = allLevelsCompleted;
+        };
+
+        // Upstream v1.0.5: gate the highscore form on validateScoreWithLevel().
+        this.showHighscoreForm = function () {
+            var scoreIsValid = this.validateScoreWithLevel();
+            var localOnly = this.serverMaxLevel !== 'unlimited' && this.level > this.serverMaxLevel;
+            var localOnlyHTML = localOnly
+                ? "<div id='local-only-warning'>This run went beyond the server max level, so the leaderboard may reject it as local play only.</div>"
+                : "";
+            var inputHTML = scoreIsValid
+                ? localOnlyHTML + "<div id='highscore-form'><span id='form-validator'></span><input type='text' id='playerName'/><span class='button' id='score-submit'>save</span></div>"
+                : "<div id='invalid-score'>Your score looks fake, the highscore list is only for honest players ;)</div>";
+            var title = this.ebeeMode ? (this.allLevelsCompleted ? "Hive secured" : "Flight over") : "Game over";
+            this.showMessage(title, "Total Score: " + this.score.score + (HIGHSCORE_ENABLED ? inputHTML : ''));
+            if (scoreIsValid) $('#playerName').focus();
+        };
 
         this.showMessage = function(title, text) {
             this.timer.stop();
@@ -530,6 +909,7 @@ function geronimo() {
                 game.level = 1;
                 this.refreshLevel(".level");
                 game.gameOver = false;
+                game.allLevelsCompleted = false;
             }
             pacman.reset();
 
@@ -779,6 +1159,10 @@ function geronimo() {
         this.direction = right;
         this.radius = pacman.radius;
         this.draw = function (context) {
+            if (game.ebeeMode) {
+                drawFlower(context, this);
+                return;
+            }
             if (this.dead) {
                 context.drawImage(this.deadImg, this.posX, this.posY, 2*this.radius, 2*this.radius);
             }
@@ -808,7 +1192,7 @@ function geronimo() {
 
         this.die = function() {
             if (!this.dead) {
-                game.score.add(100);
+                game.score.add(GHOST_POINTS);
                 //this.reset();
                 this.dead = true;
                 this.changeSpeed(game.ghostSpeedNormal);
@@ -871,8 +1255,9 @@ function geronimo() {
             else {
 
                 /* Check Ghost / Pacman Collision            */
-                if ((between(pacman.getCenterX(), this.getCenterX()-10, this.getCenterX()+10))
-                    && (between(pacman.getCenterY(), this.getCenterY()-10, this.getCenterY()+10)))
+                var collisionRange = game.ebeeMode ? 15 : 10;
+                if ((between(pacman.getCenterX(), this.getCenterX()-collisionRange, this.getCenterX()+collisionRange))
+                    && (between(pacman.getCenterY(), this.getCenterY()-collisionRange, this.getCenterY()+collisionRange)))
                 {
                     if ((!this.dazzled) && (!this.dead)) {
                         pacman.die();
@@ -1148,22 +1533,23 @@ function geronimo() {
                 if ((field === "pill") || (field === "powerpill")) {
                     //console.log("Pill found at ("+gridX+"/"+gridY+"). Pacman at ("+this.posX+"/"+this.posY+")");
                     if (
-                        ((this.dirX == 1) && (between(this.posX, game.toPixelPos(gridX)+this.radius-5, game.toPixelPos(gridX+1))))
-                        || ((this.dirX == -1) && (between(this.posX, game.toPixelPos(gridX), game.toPixelPos(gridX)+5)))
-                        || ((this.dirY == 1) && (between(this.posY, game.toPixelPos(gridY)+this.radius-5, game.toPixelPos(gridY+1))))
-                        || ((this.dirY == -1) && (between(this.posY, game.toPixelPos(gridY), game.toPixelPos(gridY)+5)))
+                        // Upstream PR #57: use this.speed instead of hardcoded 5 so collision still works at non-default speeds.
+                        ((this.dirX == 1) && (between(this.posX, game.toPixelPos(gridX)+this.radius-this.speed, game.toPixelPos(gridX+1))))
+                        || ((this.dirX == -1) && (between(this.posX, game.toPixelPos(gridX), game.toPixelPos(gridX)+this.speed)))
+                        || ((this.dirY == 1) && (between(this.posY, game.toPixelPos(gridY)+this.radius-this.speed, game.toPixelPos(gridY+1))))
+                        || ((this.dirY == -1) && (between(this.posY, game.toPixelPos(gridY), game.toPixelPos(gridY)+this.speed)))
                         || (fieldAhead === "wall")
                         )
                         {    var s;
                             if (field === "powerpill") {
                                 Sound.play("powerpill");
-                                s = 50;
+                                s = POWERPILL_POINTS;
                                 this.enableBeastMode();
                                 game.startGhostFrightened();
                                 }
                             else {
                                 Sound.play("waka");
-                                s = 10;
+                                s = PILL_POINTS;
                                 game.pillCount--;
                                 }
                             game.map.posY[gridY].posX[gridX].type = "null";
@@ -1177,10 +1563,13 @@ function geronimo() {
                     this.stuckY = this.dirY;
                     pacman.stop();
                     // get out of the wall
-                    if ((this.stuckX == 1) && ((this.posX % 2*this.radius) != 0)) this.posX -= 5;
-                    if ((this.stuckY == 1) && ((this.posY % 2*this.radius) != 0)) this.posY -= 5;
-                    if (this.stuckX == -1) this.posX += 5;
-                    if (this.stuckY == -1) this.posY += 5;
+                    // Bug fix: operator precedence. `posX % 2*radius` parses as `(posX%2)*radius`,
+                    // which is almost never zero and caused spurious nudges. Use `posX % (2*radius)`.
+                    // Upstream PR #57: use this.speed instead of hardcoded 5.
+                    if ((this.stuckX == 1) && ((this.posX % (2 * this.radius)) != 0)) this.posX -= this.speed;
+                    if ((this.stuckY == 1) && ((this.posY % (2 * this.radius)) != 0)) this.posY -= this.speed;
+                    if (this.stuckX == -1) this.posX += this.speed;
+                    if (this.stuckY == -1) this.posY += this.speed;
                 }
 
             }
@@ -1205,15 +1594,16 @@ function geronimo() {
                         console.log("y: "+this.getGridPosY()+" + "+this.directionWatcher.get().dirY);
                         var x = this.getGridPosX()+this.directionWatcher.get().dirX;
                         var y = this.getGridPosY()+this.directionWatcher.get().dirY;
+                        // Bug fix: the original code assigned to `x` in the upward-wrap branch
+                        // (`if (y <= -1) x = ...`) and used the typo `game.heigth` in the
+                        // downward-wrap branch. Together this made pacman teleport horizontally
+                        // through the centre of the board when input pushed him off the top/bottom.
                         if (x <= -1) x = game.width/(this.radius*2)-1;
                         if (x >= game.width/(this.radius*2)) x = 0;
-                        if (y <= -1) x = game.height/(this.radius*2)-1;
-                        if (y >= game.heigth/(this.radius*2)) y = 0;
+                        if (y <= -1) y = game.height/(this.radius*2)-1;
+                        if (y >= game.height/(this.radius*2)) y = 0;
 
-                        console.log("x: "+x);
-                        console.log("y: "+y);
                         var nextTile = game.map.posY[y].posX[x].type;
-                        console.log("checkNextTile: "+nextTile);
 
                         if (nextTile != "wall") {
                             this.setDirection(this.directionWatcher.get());
@@ -1329,10 +1719,9 @@ function geronimo() {
             this.lives--;
             console.log("pacman died, "+this.lives+" lives left");
             if (this.lives <= 0) {
-                var input = "<div id='highscore-form'><span id='form-validater'></span><input type='text' id='playerName'/><span class='button' id='score-submit'>save</span></div>";
-                game.showMessage("Game over","Total Score: "+game.score.score+input);
-                game.gameOver = true;
-                $('#playerName').focus();
+                // Upstream v1.0.5: route through endGame() + showHighscoreForm() so score validation runs.
+                game.endGame(false);
+                game.showHighscoreForm();
                 }
             game.drawHearts(this.lives);
         }
@@ -1402,6 +1791,11 @@ function checkAppCache() {
         // Get and show cloud location metadata
         getCloudMetadata();
 
+        // Apply any saved user override immediately, then refresh from server.
+        applyEbeeMode();
+        applyMaxLevel();
+        fetchServerConfig();
+
         if (window.applicationCache != null) checkAppCache();
 
         /* -------------------- EVENT LISTENERS -------------------------- */
@@ -1430,9 +1824,9 @@ function checkAppCache() {
         $('body').on('click', '#score-submit', function(){
             console.log("submit highscore pressed");
             if ($('#playerName').val() === "" || $('#playerName').val() === undefined) {
-                $('#form-validater').html("Please enter a name<br/>");
+                $('#form-validator').html("Please enter a name<br/>");
             } else {
-                $('#form-validater').html("");
+                $('#form-validator').html("");
                 addHighscore();
             }
         });
@@ -1497,6 +1891,9 @@ function checkAppCache() {
         $(document).on('click','.button#newGame',function(event) {
             game.newGame();
         });
+        $(document).on('click','.button#restartLevel',function(event) {
+            game.restartLevel();
+        });
         $(document).on('click','.button#highscore',function(event) {
             game.showContent('highscore-content');
             getHighscore();
@@ -1508,6 +1905,81 @@ function checkAppCache() {
         });
         $(document).on('click','.button#instructions',function(event) {
             game.showContent('instructions-content');
+        });
+        $(document).on('click','.button#settings',function(event) {
+            game.showContent('settings-content');
+            renderSettingsForm();
+        });
+        $(document).on('click','.button#settings-save',function(event) {
+            var ebeeEnabled = $('#ebeeMode').is(':checked');
+            var mode = $('input[name="maxLevelMode"]:checked').val();
+            var value;
+            if (mode === 'server') {
+                value = null;
+            } else if (mode === 'unlimited') {
+                value = 'unlimited';
+            } else {
+                var n = parseInt($('#maxLevelCustom').val(), 10);
+                if (!Number.isInteger(n) || n < 1 || n > 999) {
+                    $('#settings-status').text('Please enter a whole number between 1 and 999.');
+                    return;
+                }
+                value = n;
+            }
+
+            // Ask the server to validate / authorise each change before we
+            // persist local overrides. Gameplay and eBee mode have separate
+            // server locks, so one can be editable while the other is fixed.
+            var payload = {};
+            if (game.allowClientOverride) {
+                payload.maxLevel = (value === null) ? game.serverMaxLevel : value;
+            }
+            if (game.allowEbeeModeOverride) {
+                payload.ebeeMode = ebeeEnabled;
+            }
+
+            if (!Object.keys(payload).length) {
+                $('#settings-status').text('This server controls gameplay config and eBee mode.');
+                return;
+            }
+
+            $.ajax({
+                type: 'POST',
+                url: 'config',
+                data: payload,
+                success: function () {
+                    if (game.allowClientOverride) {
+                        writeUserMaxLevelOverride(value);
+                        applyMaxLevel();
+                    }
+                    if (game.allowEbeeModeOverride) {
+                        writeEbeeMode(ebeeEnabled);
+                        applyEbeeMode();
+                    }
+                    var effective = (game.maxLevel === 'unlimited') ? 'unlimited' : game.maxLevel;
+                    $('#settings-status').text('Saved. Max level is now ' + effective + '. eBee mode is ' + (game.ebeeMode ? 'on' : 'off') + '.');
+                },
+                error: function (xhr) {
+                    var msg = 'Server rejected the change.';
+                    try {
+                        var body = xhr.responseJSON || JSON.parse(xhr.responseText);
+                        if (body && body.error) msg = 'Server: ' + body.error;
+                    } catch (e) { /* keep default */ }
+                    if (xhr.status === 403) {
+                        fetchServerConfig();
+                        renderSettingsForm();
+                    }
+                    $('#settings-status').text(msg);
+                }
+            });
+        });
+        $(document).on('click','.button#settings-reset',function(event) {
+            writeUserMaxLevelOverride(null);
+            writeEbeeMode(false);
+            applyEbeeMode();
+            applyMaxLevel();
+            renderSettingsForm();
+            $('#settings-status').text('Reset to server default.');
         });
         $(document).on('click','.button#info',function(event) {
             game.showContent('info-content');
@@ -1573,12 +2045,20 @@ function checkAppCache() {
                 dotPosY = this.row;
                $.each(this.posX, function() {
                    if (this.type == "pill") {
-                    context.arc(game.toPixelPos(this.col-1)+pacman.radius,game.toPixelPos(dotPosY-1)+pacman.radius,game.pillSize,0*Math.PI,2*Math.PI);
+                    var pillX = game.toPixelPos(this.col-1)+pacman.radius;
+                    var pillY = game.toPixelPos(dotPosY-1)+pacman.radius;
+                    context.arc(pillX,pillY,game.pillSize,0*Math.PI,2*Math.PI);
                     context.moveTo(game.toPixelPos(this.col-1), game.toPixelPos(dotPosY-1));
                    }
                    else if (this.type == "powerpill") {
-                    context.arc(game.toPixelPos(this.col-1)+pacman.radius,game.toPixelPos(dotPosY-1)+pacman.radius,game.powerpillSizeCurrent,0*Math.PI,2*Math.PI);
-                    context.moveTo(game.toPixelPos(this.col-1), game.toPixelPos(dotPosY-1));
+                    var powerPillX = game.toPixelPos(this.col-1)+pacman.radius;
+                    var powerPillY = game.toPixelPos(dotPosY-1)+pacman.radius;
+                    if (game.ebeeMode) {
+                        drawCiliumPill(context, powerPillX, powerPillY, 18);
+                    } else {
+                        context.arc(powerPillX,powerPillY,game.powerpillSizeCurrent,0*Math.PI,2*Math.PI);
+                        context.moveTo(game.toPixelPos(this.col-1), game.toPixelPos(dotPosY-1));
+                    }
                    }
                });
             });
@@ -1598,13 +2078,17 @@ function checkAppCache() {
 
 
                 // Pac Man
-                context.beginPath();
-                context.fillStyle = "Yellow";
-                context.strokeStyle = "Yellow";
-                context.arc(pacman.posX+pacman.radius,pacman.posY+pacman.radius,pacman.radius,pacman.angle1*Math.PI,pacman.angle2*Math.PI);
-                context.lineTo(pacman.posX+pacman.radius, pacman.posY+pacman.radius);
-                context.stroke();
-                context.fill();
+                if (game.ebeeMode) {
+                    drawEbee(context, pacman);
+                } else {
+                    context.beginPath();
+                    context.fillStyle = "Yellow";
+                    context.strokeStyle = "Yellow";
+                    context.arc(pacman.posX+pacman.radius,pacman.posY+pacman.radius,pacman.radius,pacman.angle1*Math.PI,pacman.angle2*Math.PI);
+                    context.lineTo(pacman.posX+pacman.radius, pacman.posY+pacman.radius);
+                    context.stroke();
+                    context.fill();
+                }
             }
 
         }
@@ -1699,6 +2183,12 @@ function checkAppCache() {
             if (!$('#playerName').is(':focus')) {
                 game.pause = 1;
                 game.newGame();
+                }
+                break;
+            case 82:    // R pressed
+            if (!$('#playerName').is(':focus')) {
+                game.pause = 1;
+                game.restartLevel();
                 }
                 break;
             case 77:    // M pressed

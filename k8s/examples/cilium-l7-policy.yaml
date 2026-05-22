@@ -1,0 +1,148 @@
+# Cilium L7 network policies for the Pac-Man multi-role deployment.
+#
+# These policies use the /internal/* paths so Cilium can enforce fine-grained
+# HTTP-aware access control between microservice roles.
+#
+# Apply after deploying with multi-role-deployment.yaml.
+---
+# Allow pacman-web to reach pacman-score on score read/write paths only.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-web-to-score
+  namespace: pacman-demo
+spec:
+  endpointSelector:
+    matchLabels:
+      app: pacman
+      role: score
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            app: pacman
+            role: web
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+          rules:
+            http:
+              - method: GET
+                path: "/healthz"
+              - method: GET
+                path: "/readyz"
+              - method: GET
+                path: "/highscores/list"
+              - method: POST
+                path: "/highscores"
+              - method: GET
+                path: "/internal/score/read"
+              - method: POST
+                path: "/internal/score/write"
+              - method: GET
+                path: "/metrics"
+---
+# Allow pacman-web to reach pacman-user on user session/stats paths only.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-web-to-user
+  namespace: pacman-demo
+spec:
+  endpointSelector:
+    matchLabels:
+      app: pacman
+      role: user
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            app: pacman
+            role: web
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+          rules:
+            http:
+              - method: GET
+                path: "/healthz"
+              - method: GET
+                path: "/readyz"
+              - method: GET
+                path: "/user/id"
+              - method: POST
+                path: "/user/stats"
+              - method: GET
+                path: "/user/stats"
+              - method: GET
+                path: "/internal/user/session"
+              - method: GET
+                path: "/internal/user/stats"
+              - method: POST
+                path: "/internal/user/stats"
+              - method: GET
+                path: "/metrics"
+---
+# Allow external ingress to pacman-web on game and observability paths.
+# Deny direct external access to score/user backend Services.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: allow-ingress-to-web
+  namespace: pacman-demo
+spec:
+  endpointSelector:
+    matchLabels:
+      app: pacman
+      role: web
+  ingress:
+    - toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+          rules:
+            http:
+              - method: GET
+                path: "/"
+              - method: GET
+                path: "/pacman-canvas.js"
+              - method: GET
+                path: "/pacman-canvas.css"
+              - method: GET
+                path: "/style.css"
+              - method: GET
+                path: "/cache.manifest"
+              - method: GET
+                path: "/data/map.json"
+              - method: GET
+                path: "/js/.*"
+              - method: GET
+                path: "/img/.*"
+              - method: GET
+                path: "/fonts/.*"
+              - method: GET
+                path: "/mp3/.*"
+              - method: GET
+                path: "/wav/.*"
+              - method: GET
+                path: "/healthz"
+              - method: GET
+                path: "/readyz"
+              - method: GET
+                path: "/version"
+              - method: GET
+                path: "/config"
+              - method: POST
+                path: "/config"
+              - method: GET
+                path: "/highscores/list"
+              - method: POST
+                path: "/highscores"
+              - method: GET
+                path: "/user/id"
+              - method: POST
+                path: "/user/stats"
+              - method: GET
+                path: "/user/stats"
+              - method: GET
+                path: "/metrics"
