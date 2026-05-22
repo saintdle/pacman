@@ -1,0 +1,38 @@
+gameConfig:
+  maxLevel: "10"
+  allowClientConfigOverride: "false"
+  ebeeMode: "true"
+  allowClientEbeeModeOverride: "false"
+  appVersion: "2.0.0"
+  appVariant: "stable"
+  appColor: "#ffcc00"
+  demoSecurityMode: "true"
+  demoTokenHeader: "x-demo-token"
+  demoToken: "pacman-demo"
+
+extraEnv:
+  - name: MAX_LEVEL
+    value: "{{ .Values.gameConfig.maxLevel }}"
+  - name: ALLOW_CLIENT_CONFIG_OVERRIDE
+    value: "{{ .Values.gameConfig.allowClientConfigOverride }}"
+  - name: EBEE_MODE
+    value: "{{ .Values.gameConfig.ebeeMode }}"
+  - name: ALLOW_CLIENT_EBEE_MODE_OVERRIDE
+    value: "{{ .Values.gameConfig.allowClientEbeeModeOverride }}"
+  - name: APP_VERSION
+    value: "{{ .Values.gameConfig.appVersion }}"
+  - name: APP_VARIANT
+    value: "{{ .Values.gameConfig.appVariant }}"
+  - name: APP_COLOR
+    value: "{{ .Values.gameConfig.appColor }}"
+  - name: DEMO_SECURITY_MODE
+    value: "{{ .Values.gameConfig.demoSecurityMode }}"
+  - name: DEMO_TOKEN_HEADER
+    value: "{{ .Values.gameConfig.demoTokenHeader }}"
+  - name: DEMO_TOKEN
+    value: "{{ .Values.gameConfig.demoToken }}"
+
+serviceMonitor:
+  enabled: true
+  interval: 15s
+  path: /metrics

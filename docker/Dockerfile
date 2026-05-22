@@ -1,19 +1,32 @@
-FROM node:boron
+# syntax=docker/dockerfile:1.7
 
-MAINTAINER Ivan Font <ifont@redhat.com>
+FROM node:22-alpine AS deps
+WORKDIR /app
+COPY package.json package-lock.json* ./
+RUN npm ci --omit=dev
 
-# Create app directory
-RUN mkdir -p /usr/src/app
-WORKDIR /usr/src/app
+FROM node:22-alpine AS runtime
+ENV NODE_ENV=production \
+    PORT=8080 \
+    HOST=0.0.0.0
+WORKDIR /app
 
-# Clone game source code
-RUN git clone https://github.com/font/pacman.git .
+# Copy production deps and source
+COPY --from=deps /app/node_modules ./node_modules
+COPY package.json ./
+COPY proto ./proto
+COPY src ./src
+COPY tools ./tools
+COPY views ./views
+COPY public ./public
 
-# Install app dependencies
-RUN npm install
+# Drop privileges
+RUN addgroup -S app && adduser -S app -G app && chown -R app:app /app
+USER app
 
-# Expose port 8080
 EXPOSE 8080
 
-# Run container
-CMD ["npm", "start"]
+HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 \
+  CMD wget -qO- http://127.0.0.1:8080/healthz >/dev/null || exit 1
+
+CMD ["node", "src/server.js"]

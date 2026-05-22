@@ -1,0 +1,22 @@
+# Prometheus ServiceMonitor for all Pac-Man roles.
+# Requires the prometheus-operator CRDs (kube-prometheus-stack or similar).
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: pacman
+  namespace: pacman-demo
+  labels:
+    app: pacman
+spec:
+  selector:
+    matchLabels:
+      app: pacman
+  namespaceSelector:
+    matchNames:
+      - pacman-demo
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
+      honorLabels: true

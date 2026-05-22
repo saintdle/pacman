@@ -58,8 +58,113 @@ body {
 }
 
 #highscore-form { margin-top: 8px; }
+#local-only-warning,
+#server-score-rejected {
+    line-height: 1.6;
+    margin-top: 8px;
+}
 input[type="text"]:hover, input[type="text"]:focus, input[type="password"]:hover, input[type="password"]:focus, textarea:hover, textarea:focus {
     border: 1px #c80a0a solid;
+}
+
+#settings-content fieldset {
+    border: 1px solid rgba(255,255,255,0.5);
+    margin: 12px 0;
+    padding: 12px;
+}
+#settings-content legend {
+    color: #ffcc00;
+    padding: 0 6px;
+}
+#settings-content label {
+    line-height: 2;
+}
+.settings-badge {
+    display: none;
+    color: #000;
+    background: #ffcc00;
+    font-size: 8px;
+    padding: 3px 5px;
+    vertical-align: middle;
+}
+#settings-status,
+#settings-locked-notice,
+#ebee-mode-locked-notice {
+    line-height: 1.6;
+}
+#server-config-json {
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.25);
+    color: #fff;
+    font-size: 9px;
+    line-height: 1.6;
+    overflow-x: auto;
+    padding: 10px;
+    white-space: pre-wrap;
+}
+.theme-preview {
+    align-items: center;
+    display: flex;
+    gap: 14px;
+    margin-top: 12px;
+}
+.theme-preview img {
+    height: 28px;
+    width: 28px;
+}
+.preview-ebee,
+.preview-flower {
+    height: 30px;
+    position: relative;
+    width: 30px;
+}
+.preview-ebee::before,
+.preview-ebee::after {
+    background: #bff3ff;
+    content: "";
+    height: 8px;
+    position: absolute;
+    top: 6px;
+    width: 10px;
+}
+.preview-ebee::before { left: 0; }
+.preview-ebee::after { left: 0; top: 17px; }
+.preview-ebee span {
+    background: repeating-linear-gradient(90deg, #f6c915 0 6px, #161616 6px 10px);
+    display: block;
+    height: 20px;
+    left: 8px;
+    position: absolute;
+    top: 5px;
+    width: 18px;
+}
+.preview-flower span,
+.preview-flower::before,
+.preview-flower::after {
+    content: "";
+    position: absolute;
+}
+.preview-flower span {
+    background: #ffea00;
+    height: 10px;
+    left: 10px;
+    top: 8px;
+    width: 10px;
+}
+.preview-flower::before {
+    background: #ff8bd1;
+    box-shadow: -8px 8px #ff8bd1, 8px 8px #ff8bd1, 0 16px #ff8bd1;
+    height: 10px;
+    left: 10px;
+    top: 0;
+    width: 10px;
+}
+.preview-flower::after {
+    background: #36b24a;
+    height: 10px;
+    left: 14px;
+    top: 20px;
+    width: 4px;
 }
 
 table, th {
@@ -138,6 +243,7 @@ audio {display: block; }
 .time { width: 290px; }
 .score { width: 290px; }
 .score, .lives, .level, .cloudprovider, .zone, .host, .time { display: inline-block; }
+.lives img { width: 18px; height: 18px; vertical-align: middle; }
 
 /* ---------- Controls ------------------------*/
 
@@ -162,6 +268,13 @@ audio {display: block; }
     line-height: 40px;
     font-size: 120%;
     }
+.keyboard-hints {
+    color: rgba(255,255,255,0.75);
+    font-size: 9px;
+    line-height: 1.6;
+    margin: 10px auto 0;
+    max-width: 520px;
+}
 
 .controlSound {
     background: url('img/audio-icon.png');
