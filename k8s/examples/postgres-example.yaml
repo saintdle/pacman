@@ -62,6 +62,9 @@ spec:
         app: postgres
     spec:
       securityContext:
+        # OpenShift note: the restricted-v2 SCC rejects fixed IDs outside the
+        # namespace range. On OpenShift, drop fsGroup/runAsUser and keep only
+        # runAsNonRoot so the SCC injects a namespace-allocated UID.
         fsGroup: 999
         runAsUser: 999
         runAsNonRoot: true
