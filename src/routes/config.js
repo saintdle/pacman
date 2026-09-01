@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { config } from '../config/index.js';
+import { getClientConfig } from './client-config.js';
 
 // Surfaces a small slice of server configuration to the client so the game
 // can adapt to operator-controlled values (e.g. the maximum reachable level).
@@ -7,24 +8,13 @@ import { config } from '../config/index.js';
 export function configRouter() {
   const router = Router();
 
-  const clientConfig = () => ({
-    maxLevel: config.MAX_LEVEL,
-    allowClientOverride: config.ALLOW_CLIENT_CONFIG_OVERRIDE,
-    ebeeMode: config.EBEE_MODE,
-    allowEbeeModeOverride: config.ALLOW_CLIENT_EBEE_MODE_OVERRIDE,
-    appRole: config.APP_ROLE,
-    appVersion: config.APP_VERSION,
-    appVariant: config.APP_VARIANT,
-    appColor: config.APP_COLOR,
-  });
-
   router.get('/', (req, res) => {
-    res.json(clientConfig());
+    res.json(getClientConfig());
   });
 
   router.get('/schema', (_req, res) => {
     res.json({
-      config: clientConfig(),
+      config: getClientConfig(),
       fields: {
         maxLevel: {
           env: 'MAX_LEVEL',

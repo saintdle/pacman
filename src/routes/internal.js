@@ -13,12 +13,8 @@
 import { Router } from 'express';
 import { config } from '../config/index.js';
 import { incCounter } from '../metrics.js';
-
-const PILL_POINTS = 10;
-const POWERPILL_POINTS = 50;
-const GHOST_POINTS = 100;
-const MAX_POINTS_PER_LEVEL =
-  104 * PILL_POINTS + 4 * POWERPILL_POINTS + 4 * 4 * GHOST_POINTS;
+import { getClientConfig } from './client-config.js';
+import { validateScore } from './score-validation.js';
 
 export function internalRouter() {
   const router = Router();
@@ -39,22 +35,8 @@ export function internalRouter() {
     try {
       const userScore = Number.parseInt(req.body.score, 10);
       const userLevel = Number.parseInt(req.body.level, 10);
-
-      if (!Number.isFinite(userScore)) {
-        return res.status(400).json({ error: 'score must be a number' });
-      }
-
-      if (Number.isFinite(userLevel)) {
-        if (userLevel < 1) {
-          return res.status(400).json({ error: 'invalid level' });
-        }
-        if (config.MAX_LEVEL !== 'unlimited' && userLevel > config.MAX_LEVEL) {
-          return res.status(400).json({ error: 'invalid level' });
-        }
-        if (userScore / userLevel > MAX_POINTS_PER_LEVEL) {
-          return res.status(400).json({ error: 'score is implausible for level' });
-        }
-      }
+      const validationError = validateScore(userScore, userLevel, config.MAX_LEVEL);
+      if (validationError) return res.status(400).json({ error: validationError });
 
       incCounter('pacman_db_operations_total', { op: 'insertScore', source: 'internal' });
       incCounter('pacman_score_submissions_total', { source: 'internal' });
@@ -139,16 +121,7 @@ export function internalRouter() {
   // ---------- config ----------
 
   router.get('/config/read', (_req, res) => {
-    res.json({
-      maxLevel: config.MAX_LEVEL,
-      allowClientOverride: config.ALLOW_CLIENT_CONFIG_OVERRIDE,
-      ebeeMode: config.EBEE_MODE,
-      allowEbeeModeOverride: config.ALLOW_CLIENT_EBEE_MODE_OVERRIDE,
-      appRole: config.APP_ROLE,
-      appVersion: config.APP_VERSION,
-      appVariant: config.APP_VARIANT,
-      appColor: config.APP_COLOR,
-    });
+    res.json(getClientConfig());
   });
 
   return router;
