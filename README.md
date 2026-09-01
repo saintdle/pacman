@@ -242,6 +242,9 @@ Example ConfigMap and patch files live under [`k8s/examples`](k8s/examples):
   CRD-backed resources only when those controllers are installed.
 - [`helm-values.yaml`](k8s/examples/helm-values.yaml) shows a Helm-style
   values mapping for charts with an `extraEnv` pattern.
+- [`values-openshift.yaml`](k8s/examples/values-openshift.yaml) documents the
+  OpenShift override values for the Pac-Man Helm chart (`openShift.enabled` and
+  `openShift.sccRoleBinding.create`).
 - [`ebee-mode-rollout-patch.yaml`](k8s/examples/ebee-mode-rollout-patch.yaml)
   flips eBee mode on and bumps a pod-template annotation to force a rollout.
 
@@ -374,6 +377,18 @@ There are two deployment surfaces:
 
 Both surfaces target the same `docker.io/saintdle/pacman` image built from
 this repository.
+
+### OpenShift
+
+The container image is built to run under an arbitrary, non-root UID, so it is
+compatible with OpenShift's `restricted-v2` SCC. The
+[Helm chart](https://github.com/saintdle/helm-charts/tree/main/charts/pacman)
+auto-detects OpenShift and drops the fixed `runAsUser`/`runAsGroup`/`fsGroup`
+from every pod so the SCC can inject a namespace-allocated UID; no configuration
+is required. See [`k8s/examples/values-openshift.yaml`](k8s/examples/values-openshift.yaml)
+for the available overrides. When applying the raw manifests instead, remove the
+fixed IDs from any pod `securityContext` (keep `runAsNonRoot`) as noted in
+[`postgres-example.yaml`](k8s/examples/postgres-example.yaml).
 
 ## License
 
