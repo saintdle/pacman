@@ -2,6 +2,18 @@ import { Router } from 'express';
 import { config } from '../config/index.js';
 import { passThroughHeaders, requestJson } from '../services/http-client.js';
 import { incCounter } from '../metrics.js';
+import { getListOptions, paginate } from './list-options.js';
+
+function upstreamPath(path, req) {
+  const query = new URLSearchParams(req.query).toString();
+  return query ? `${path}?${query}` : path;
+}
+
+function normalizeName(value) {
+  if (typeof value !== 'string') return null;
+  const name = value.trim().slice(0, 32);
+  return name || null;
+}
 
 export function userRouter() {
   const router = Router();
@@ -9,14 +21,14 @@ export function userRouter() {
   router.get('/id', async (req, res, next) => {
     try {
       if (config.APP_ROLE === 'web' && config.USER_SERVICE_URL) {
-        const upstream = await requestJson(config.USER_SERVICE_URL, '/internal/user/session', {
+        const upstream = await requestJson(config.USER_SERVICE_URL, upstreamPath('/internal/user/session', req), {
           headers: passThroughHeaders(req),
         });
         return res.status(upstream.status).json(upstream.payload?.id ?? upstream.payload);
       }
 
       incCounter('pacman_db_operations_total', { op: 'createUser', source: 'public' });
-      const { id } = await req.app.locals.db.createUser();
+      const { id } = await req.app.locals.db.createUser(normalizeName(req.query.name));
       // Backwards-compat note: legacy clients received a bare Mongo ObjectId string.
       // Modern adapters return a UUID string. The shape stays "bare string in JSON".
       res.json(id);
@@ -51,6 +63,7 @@ export function userRouter() {
 
       await req.app.locals.db.updateUserStats(userId, {
         cloud: req.body.cloud,
+        name: normalizeName(req.body.name),
         zone: req.body.zone,
         host: req.body.host,
         score: Number.isFinite(userScore) ? userScore : null,
@@ -74,15 +87,19 @@ export function userRouter() {
   router.get('/stats', async (req, res, next) => {
     try {
       if (config.APP_ROLE === 'web' && config.USER_SERVICE_URL) {
-        const upstream = await requestJson(config.USER_SERVICE_URL, '/internal/user/stats', {
+        const upstream = await requestJson(config.USER_SERVICE_URL, upstreamPath('/internal/user/stats', req), {
           headers: passThroughHeaders(req),
         });
         return res.status(upstream.status).json(upstream.payload);
       }
 
       incCounter('pacman_db_operations_total', { op: 'listUserStats', source: 'public' });
-      const stats = await req.app.locals.db.listUserStats();
-      res.json(stats);
+      const options = getListOptions(req, config.LIVE_STATS_PAGE_SIZE);
+      const stats = await req.app.locals.db.listUserStats({
+        maxAgeSeconds: config.LIVE_STATS_MAX_AGE_SECONDS,
+        includeSimulated: options.includeSimulated,
+      });
+      res.json(options.hasPagination ? paginate(stats, options) : stats);
     } catch (err) {
       next(err);
     }

@@ -42,10 +42,12 @@ export class PostgresAdapter extends DatabaseAdapter {
     }
   }
 
-  async listTopScores(limit = 10) {
+  async listTopScores(limit = 10, { includeSimulated = true } = {}) {
+    const simulatorFilter = includeSimulated ? '' : "WHERE name IS NULL OR name !~* '^sim[0-9]+$'";
     const { rows } = await this.pool.query(
       `SELECT name, cloud, zone, host, score
          FROM highscores
+        ${simulatorFilter}
         ORDER BY score DESC
         LIMIT $1`,
       [limit],
@@ -74,11 +76,11 @@ export class PostgresAdapter extends DatabaseAdapter {
     );
   }
 
-  async createUser() {
+  async createUser(name) {
     const id = randomUUID();
     await this.pool.query(
-      `INSERT INTO user_stats (id, update_counter, created_at) VALUES ($1, 0, now())`,
-      [id],
+      `INSERT INTO user_stats (id, name, update_counter, created_at) VALUES ($1, $2, 0, now())`,
+      [id, name ?? null],
     );
     return { id };
   }
@@ -86,10 +88,11 @@ export class PostgresAdapter extends DatabaseAdapter {
   async updateUserStats(id, patch) {
     await this.pool.query(
       `INSERT INTO user_stats
-         (id, cloud, zone, host, score, level, lives, elapsed_time,
+         (id, name, cloud, zone, host, score, level, lives, elapsed_time,
           created_at, referer, user_agent, hostname, ip_addr, update_counter)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), $9, $10, $11, $12, 1)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now(), $10, $11, $12, $13, 1)
        ON CONFLICT (id) DO UPDATE SET
+         name = COALESCE(EXCLUDED.name, user_stats.name),
          cloud = EXCLUDED.cloud,
          zone = EXCLUDED.zone,
          host = EXCLUDED.host,
@@ -105,6 +108,7 @@ export class PostgresAdapter extends DatabaseAdapter {
          update_counter = user_stats.update_counter + 1`,
       [
         id,
+        patch.name ?? null,
         patch.cloud ?? null,
         patch.zone ?? null,
         patch.host ?? null,
@@ -120,13 +124,18 @@ export class PostgresAdapter extends DatabaseAdapter {
     );
   }
 
-  async listUserStats() {
+  async listUserStats({ maxAgeSeconds = 300, includeSimulated = true } = {}) {
+    const simulatorFilter = includeSimulated ? '' : "AND (name IS NULL OR name !~* '^sim[0-9]+$')";
     const { rows } = await this.pool.query(
-      `SELECT cloud, zone, host, score, level, lives,
-              elapsed_time AS et, update_counter AS txncount
+      `SELECT id, name, cloud, zone, host, score, level, lives,
+              elapsed_time AS et, update_counter AS txncount,
+              created_at AS date
          FROM user_stats
         WHERE score IS NOT NULL
+          AND created_at >= now() - ($1 * interval '1 second')
+          ${simulatorFilter}
         ORDER BY created_at ASC`,
+      [maxAgeSeconds],
     );
     return rows;
   }

@@ -1,6 +1,6 @@
 {
   "name": "pacman",
-  "version": "0.7.3",
+  "version": "0.7.5",
   "description": "Pac-Man Node.js game with pluggable database backends (memory / MongoDB / PostgreSQL)",
   "type": "module",
   "main": "src/server.js",

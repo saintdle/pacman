@@ -14,8 +14,9 @@ export class MemoryAdapter extends DatabaseAdapter {
     return true;
   }
 
-  async listTopScores(limit = 10) {
+  async listTopScores(limit = 10, { includeSimulated = true } = {}) {
     return [...this.highscores]
+      .filter((score) => includeSimulated || !/^sim\d+$/i.test(score.name ?? ''))
       .sort((a, b) => b.score - a.score)
       .slice(0, limit)
       .map(({ name, cloud, zone, host, score }) => ({ name, cloud, zone, host, score }));
@@ -25,9 +26,9 @@ export class MemoryAdapter extends DatabaseAdapter {
     this.highscores.push({ ...record, date: record.date ?? new Date().toISOString() });
   }
 
-  async createUser() {
+  async createUser(name) {
     const id = randomUUID();
-    this.users.set(id, { id, updateCounter: 0, date: new Date().toISOString() });
+    this.users.set(id, { id, name: name ?? null, updateCounter: 0, date: new Date().toISOString() });
     return { id };
   }
 
@@ -46,10 +47,15 @@ export class MemoryAdapter extends DatabaseAdapter {
     });
   }
 
-  async listUserStats() {
+  async listUserStats({ maxAgeSeconds = 300, includeSimulated = true } = {}) {
+    const cutoff = Date.now() - maxAgeSeconds * 1000;
     return [...this.users.values()]
       .filter((u) => typeof u.score === 'number')
+      .filter((u) => Date.parse(u.date) >= cutoff)
+      .filter((u) => includeSimulated || !/^sim\d+$/i.test(u.name ?? ''))
       .map((u) => ({
+        id: u.id,
+        name: u.name,
         cloud: u.cloud,
         zone: u.zone,
         host: u.host,
@@ -58,6 +64,7 @@ export class MemoryAdapter extends DatabaseAdapter {
         lives: u.lives,
         et: u.elapsedTime,
         txncount: u.updateCounter,
+        date: u.date,
       }));
   }
 }

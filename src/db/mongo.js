@@ -63,10 +63,11 @@ export class MongoAdapter extends DatabaseAdapter {
     }
   }
 
-  async listTopScores(limit = 10) {
+  async listTopScores(limit = 10, { includeSimulated = true } = {}) {
+    const filter = includeSimulated ? {} : { $or: [{ name: { $exists: false } }, { name: { $not: /^sim\d+$/i } }] };
     const docs = await this.db
       .collection('highscore')
-      .find({}, { projection: { _id: 0, name: 1, cloud: 1, zone: 1, host: 1, score: 1 } })
+      .find(filter, { projection: { _id: 0, name: 1, cloud: 1, zone: 1, host: 1, score: 1 } })
       .sort({ score: -1 })
       .limit(limit)
       .toArray();
@@ -80,10 +81,10 @@ export class MongoAdapter extends DatabaseAdapter {
     });
   }
 
-  async createUser() {
+  async createUser(name) {
     const result = await this.db
       .collection('userstats')
-      .insertOne({ date: new Date().toISOString() }, { writeConcern: { w: 'majority', j: true, wtimeout: 10000 } });
+      .insertOne({ name: name ?? null, date: new Date().toISOString() }, { writeConcern: { w: 'majority', j: true, wtimeout: 10000 } });
     return { id: result.insertedId.toString() };
   }
 
@@ -105,13 +106,22 @@ export class MongoAdapter extends DatabaseAdapter {
     );
   }
 
-  async listUserStats() {
+  async listUserStats({ maxAgeSeconds = 300, includeSimulated = true } = {}) {
+    const filter = {
+      score: { $exists: true },
+      date: { $gte: new Date(Date.now() - maxAgeSeconds * 1000).toISOString() },
+    };
+    if (!includeSimulated) {
+      filter.$or = [{ name: { $exists: false } }, { name: { $not: /^sim\d+$/i } }];
+    }
     const docs = await this.db
       .collection('userstats')
-      .find({ score: { $exists: true } })
+      .find(filter)
       .sort({ _id: 1 })
       .toArray();
     return docs.map((d) => ({
+      id: d._id.toString(),
+      name: d.name,
       cloud: d.cloud,
       zone: d.zone,
       host: d.host,
@@ -120,6 +130,7 @@ export class MongoAdapter extends DatabaseAdapter {
       lives: d.lives,
       et: d.elapsedTime,
       txncount: d.updateCounter,
+      date: d.date,
     }));
   }
 }

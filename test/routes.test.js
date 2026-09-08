@@ -107,6 +107,51 @@ test('POST /user/stats updates stats for an existing user id', async () => {
   assert.equal(ours.txncount, 1);
 });
 
+test('live stats retain names, age out inactive sessions, and paginate simulator rows', async () => {
+  const humanSession = await request(app).get('/user/id?name=Alice');
+  const simulatorSession = await request(app).get('/user/id?name=sim1');
+
+  await request(app).post('/user/stats').type('form').send({
+    userId: humanSession.body,
+    name: 'Alice',
+    score: '101',
+    level: '1',
+  });
+  await request(app).post('/user/stats').type('form').send({
+    userId: simulatorSession.body,
+    name: 'sim1',
+    score: '102',
+    level: '1',
+  });
+
+  const page = await request(app).get('/user/stats?page=1&pageSize=1&includeSimulated=false');
+  assert.equal(page.status, 200);
+  assert.equal(page.body.items.length, 1);
+  assert.equal(page.body.items.some((row) => row.name === 'sim1'), false);
+  assert.ok(page.body.total >= 1);
+
+  const allHumanRows = await request(app).get('/user/stats?includeSimulated=false');
+  assert.equal(allHumanRows.body.items.some((row) => row.name === 'Alice' && row.id === humanSession.body), true);
+
+  db.users.get(humanSession.body).date = new Date(Date.now() - 301_000).toISOString();
+  const aged = await request(app).get('/user/stats?includeSimulated=false');
+  assert.equal(aged.status, 200);
+  assert.equal(aged.body.items.some((row) => row.name === 'Alice'), false);
+});
+
+test('highscore list supports pagination and simulator filtering', async () => {
+  await request(app).post('/highscores').type('form').send({ name: 'sim2', score: '200', level: '1' });
+  await request(app).post('/highscores').type('form').send({ name: 'Human', score: '100', level: '1' });
+
+  const page = await request(app).get('/highscores/list?page=1&pageSize=1&includeSimulated=false');
+  assert.equal(page.status, 200);
+  assert.equal(page.body.items.length, 1);
+  assert.equal(page.body.items.some((row) => /^sim\d+$/i.test(row.name)), false);
+  assert.ok(page.body.total >= 1);
+  const humanRows = await request(app).get('/highscores/list?includeSimulated=false');
+  assert.equal(humanRows.body.items.some((row) => row.name === 'Human'), true);
+});
+
 test('POST /user/stats rejects missing userId', async () => {
   const res = await request(app).post('/user/stats').type('form').send({ score: '1' });
   assert.equal(res.status, 400);

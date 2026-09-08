@@ -60,11 +60,11 @@ See [`.env.example`](.env.example) for the full set of variables.
 | GET    | `/config`            | Client-visible config (`maxLevel`, eBee mode, override flags) |
 | GET    | `/config/schema`     | Client-visible config fields and env mappings                 |
 | POST   | `/config`            | Validate/authorise a client config override                   |
-| GET    | `/highscores/list`   | Top 10 high scores                                            |
+| GET    | `/highscores/list`   | High scores; accepts `page`, `pageSize`, and `includeSimulated` |
 | POST   | `/highscores`        | Submit a high score (validated, see below)                    |
-| GET    | `/user/id`           | Create a new user id (UUID v4)                                |
+| GET    | `/user/id`           | Create a new user id (UUID v4); accepts `name`                 |
 | POST   | `/user/stats`        | Update live stats for a user id                               |
-| GET    | `/user/stats`        | List all live stats                                           |
+| GET    | `/user/stats`        | Active live stats; accepts `page`, `pageSize`, and `includeSimulated` |
 | GET    | `/location/metadata` | Detect cloud / zone / host                                    |
 
 #### Internal (policy-friendly) endpoints

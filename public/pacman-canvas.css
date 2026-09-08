@@ -182,10 +182,10 @@ tr:hover {
     background-color: rgba(0,0,0,0.4);
 }
 
-#highscore-content { max-width: 1080px; }
-#highscore-table { width: 100%; text-align: center;}
+#highscore-content { max-width: 1080px; box-sizing: border-box; }
+#highscore-table { width: 100%; min-width: 700px; text-align: center;}
 #livestats-content { max-width: 1024px; }
-#livestats-table { width: 100%; text-align: center;}
+#livestats-table { width: 100%; min-width: 1080px; text-align: center;}
 #rank {}
 #playername {}
 #cloudprovider {}
@@ -197,6 +197,13 @@ tr:hover {
 #lives {}
 #elapsedtime {}
 #txncount {}
+
+.table-scroll { max-width: 100%; overflow-x: auto; }
+.table-controls { margin: 12px 0; }
+.table-controls label { cursor: pointer; }
+.table-pagination { align-items: center; display: flex; gap: 16px; justify-content: center; margin-top: 18px; }
+.table-pagination .button { cursor: pointer; display: inline-block; padding: 4px 10px; }
+.table-pagination .button:disabled { cursor: default; opacity: 0.45; }
 
 #myCanvas { border: none; display: block; background: rgb(0,0,0); width: 100%;  height: auto;}
 #canvas-container { position: relative;}

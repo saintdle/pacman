@@ -25,6 +25,9 @@ services:
       POSTGRES_DB: pacman
       POSTGRES_USER: pacman
       POSTGRES_PASSWORD: pacman
+      LIVE_STATS_MAX_AGE_SECONDS: ${LIVE_STATS_MAX_AGE_SECONDS:-300}
+      LIVE_STATS_PAGE_SIZE: ${LIVE_STATS_PAGE_SIZE:-10}
+      SIMULATED_USERS_ENABLED: ${SIMULATED_USERS_ENABLED:-false}
     profiles: ["memory", "mongo", "postgres"]
     depends_on:
       mongo:

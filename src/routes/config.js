@@ -42,6 +42,24 @@ export function configRouter() {
           default: true,
           description: 'Allows browsers to store a local eBee-mode theme override.',
         },
+        liveStatsMaxAgeSeconds: {
+          env: 'LIVE_STATS_MAX_AGE_SECONDS',
+          type: 'positive integer',
+          default: 300,
+          description: 'Seconds without a live-stats update before a session is hidden.',
+        },
+        liveStatsPageSize: {
+          env: 'LIVE_STATS_PAGE_SIZE',
+          type: 'positive integer <= 100',
+          default: 10,
+          description: 'Default number of live sessions shown per page.',
+        },
+        simulatedUsersEnabled: {
+          env: 'SIMULATED_USERS_ENABLED',
+          type: 'boolean',
+          default: false,
+          description: 'Sets the default visibility of sim# users on score tables.',
+        },
       },
     });
   });
