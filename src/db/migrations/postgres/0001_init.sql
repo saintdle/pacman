@@ -17,6 +17,7 @@ CREATE INDEX IF NOT EXISTS highscores_score_desc_idx ON highscores (score DESC);
 
 CREATE TABLE IF NOT EXISTS user_stats (
   id              UUID PRIMARY KEY,
+  name            TEXT,
   cloud           TEXT,
   zone            TEXT,
   host            TEXT,
@@ -33,3 +34,4 @@ CREATE TABLE IF NOT EXISTS user_stats (
 );
 
 CREATE INDEX IF NOT EXISTS user_stats_score_idx ON user_stats (score) WHERE score IS NOT NULL;
+CREATE INDEX IF NOT EXISTS user_stats_activity_idx ON user_stats (created_at DESC);

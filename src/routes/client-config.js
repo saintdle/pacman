@@ -10,5 +10,7 @@ export function getClientConfig() {
     appVersion: config.APP_VERSION,
     appVariant: config.APP_VARIANT,
     appColor: config.APP_COLOR,
+    liveStatsPageSize: config.LIVE_STATS_PAGE_SIZE,
+    simulatedUsersEnabled: config.SIMULATED_USERS_ENABLED,
   };
 }

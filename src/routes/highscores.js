@@ -3,6 +3,12 @@ import { config } from '../config/index.js';
 import { passThroughHeaders, requestJson } from '../services/http-client.js';
 import { incCounter } from '../metrics.js';
 import { validateScore } from './score-validation.js';
+import { getListOptions, paginate } from './list-options.js';
+
+function upstreamPath(path, req) {
+  const query = new URLSearchParams(req.query).toString();
+  return query ? `${path}?${query}` : path;
+}
 
 export function highscoresRouter() {
   const router = Router();
@@ -10,15 +16,16 @@ export function highscoresRouter() {
   router.get('/list', async (req, res, next) => {
     try {
       if (config.APP_ROLE === 'web' && config.SCORE_SERVICE_URL) {
-        const upstream = await requestJson(config.SCORE_SERVICE_URL, '/internal/score/read', {
+        const upstream = await requestJson(config.SCORE_SERVICE_URL, upstreamPath('/internal/score/read', req), {
           headers: passThroughHeaders(req),
         });
         return res.status(upstream.status).json(upstream.payload);
       }
 
       incCounter('pacman_db_operations_total', { op: 'listTopScores', source: 'public' });
-      const scores = await req.app.locals.db.listTopScores(10);
-      res.json(scores);
+      const options = getListOptions(req, 10);
+      const scores = await req.app.locals.db.listTopScores(10000, options);
+      res.json(options.hasPagination ? paginate(scores, options) : scores.slice(0, 10));
     } catch (err) {
       next(err);
     }

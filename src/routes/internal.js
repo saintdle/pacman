@@ -15,6 +15,13 @@ import { config } from '../config/index.js';
 import { incCounter } from '../metrics.js';
 import { getClientConfig } from './client-config.js';
 import { validateScore } from './score-validation.js';
+import { getListOptions, paginate } from './list-options.js';
+
+function normalizeName(value) {
+  if (typeof value !== 'string') return null;
+  const name = value.trim().slice(0, 32);
+  return name || null;
+}
 
 export function internalRouter() {
   const router = Router();
@@ -24,8 +31,9 @@ export function internalRouter() {
   router.get('/score/read', async (req, res, next) => {
     try {
       incCounter('pacman_db_operations_total', { op: 'listTopScores', source: 'internal' });
-      const scores = await req.app.locals.db.listTopScores(10);
-      res.json(scores);
+      const options = getListOptions(req, 10);
+      const scores = await req.app.locals.db.listTopScores(10000, options);
+      res.json(options.hasPagination ? paginate(scores, options) : scores.slice(0, 10));
     } catch (err) {
       next(err);
     }
@@ -71,7 +79,7 @@ export function internalRouter() {
   router.get('/user/session', async (req, res, next) => {
     try {
       incCounter('pacman_db_operations_total', { op: 'createUser', source: 'internal' });
-      const { id } = await req.app.locals.db.createUser();
+      const { id } = await req.app.locals.db.createUser(normalizeName(req.query.name));
       res.json({ id });
     } catch (err) {
       next(err);
@@ -81,8 +89,12 @@ export function internalRouter() {
   router.get('/user/stats', async (req, res, next) => {
     try {
       incCounter('pacman_db_operations_total', { op: 'listUserStats', source: 'internal' });
-      const stats = await req.app.locals.db.listUserStats();
-      res.json(stats);
+      const options = getListOptions(req, config.LIVE_STATS_PAGE_SIZE);
+      const stats = await req.app.locals.db.listUserStats({
+        maxAgeSeconds: config.LIVE_STATS_MAX_AGE_SECONDS,
+        includeSimulated: options.includeSimulated,
+      });
+      res.json(options.hasPagination ? paginate(stats, options) : stats);
     } catch (err) {
       next(err);
     }
@@ -100,6 +112,7 @@ export function internalRouter() {
 
       await req.app.locals.db.updateUserStats(userId, {
         cloud: req.body.cloud,
+        name: normalizeName(req.body.name),
         zone: req.body.zone,
         host: req.body.host,
         score: Number.isFinite(Number(req.body.score)) ? Number(req.body.score) : null,

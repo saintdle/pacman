@@ -106,7 +106,7 @@ async function request(baseUrl, path, { method = 'GET', body, headers = {}, time
 function createSessionState(sessionId) {
   return {
     sessionId,
-    name: `SIM${String(sessionId).padStart(4, '0')}`,
+    name: `sim${sessionId}`,
     userAgent: userAgents[sessionId % userAgents.length],
     userId: null,
     cloud: 'synthetic',
@@ -136,7 +136,10 @@ async function loadBrowserShell(baseUrl, session, options) {
     timeoutMs: options.timeoutMs,
     optional: true,
   });
-  const userId = await request(baseUrl, '/user/id', { headers, timeoutMs: options.timeoutMs });
+  const userId = await request(baseUrl, `/user/id?name=${encodeURIComponent(session.name)}`, {
+    headers,
+    timeoutMs: options.timeoutMs,
+  });
 
   if (location && typeof location === 'object') {
     session.cloud = location.cloud || session.cloud;
@@ -162,6 +165,7 @@ async function updateStats(baseUrl, session, options) {
     },
     body: formBody({
       userId: session.userId,
+      name: session.name,
       cloud: session.cloud,
       zone: session.zone,
       host: session.host,

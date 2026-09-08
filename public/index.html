@@ -61,7 +61,10 @@
     <div class="button" id="back">&lt; back</div>
     <div>
         <h1>High score</h1>
-        <p>
+        <div class="table-controls">
+            <label><input type="checkbox" id="highscore-show-simulated" checked> Show simulated users</label>
+        </div>
+        <div class="table-scroll">
             <table id="highscore-table">
                 <thead>
                 <tr>
@@ -77,7 +80,12 @@
                 </tbody>
 
             </table>
-        </p>
+        </div>
+        <div class="table-pagination" id="highscore-pagination">
+            <button type="button" class="button" data-page-action="previous">Previous</button>
+            <span class="page-label"></span>
+            <button type="button" class="button" data-page-action="next">Next</button>
+        </div>
     </div>
 </div>
 
@@ -86,12 +94,15 @@
     <div class="button" id="back">&lt; back</div>
     <div>
         <h1>Live Stats</h1>
-        <p>
+        <div class="table-controls">
+            <label><input type="checkbox" id="livestats-show-simulated" checked> Show simulated users</label>
+        </div>
+        <div class="table-scroll">
             <table id="livestats-table">
                 <thead>
                 <tr>
-                    <!-- TODO: add cloud and host to livestats -->
                     <th id="userid">ID</th>
+                    <th id="playername">Name</th>
                     <th id="cloudprovider">Cloud</th>
                     <th id="zone">Zone</th>
                     <th id="host">Host</th>
@@ -106,7 +117,12 @@
                 </tbody>
 
             </table>
-        </p>
+        </div>
+        <div class="table-pagination" id="livestats-pagination">
+            <button type="button" class="button" data-page-action="previous">Previous</button>
+            <span class="page-label"></span>
+            <button type="button" class="button" data-page-action="next">Next</button>
+        </div>
     </div>
 </div>
 

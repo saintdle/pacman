@@ -36,6 +36,21 @@ function geronimo() {
     var inky, blinky, clyde, pinky;
 
     var mapConfig = "data/map.json";
+    var highscorePage = 1;
+    var highscoreTotalPages = 1;
+    var livestatsPage = 1;
+    var livestatsTotalPages = 1;
+
+    function escapeHtml(value) {
+        return $('<div>').text(value === undefined || value === null ? '' : value).html();
+    }
+
+    function renderPagination(selector, page, totalPages) {
+        var root = $(selector);
+        root.find('[data-page-action="previous"]').prop('disabled', page <= 1);
+        root.find('[data-page-action="next"]').prop('disabled', page >= totalPages);
+        root.find('.page-label').text('Page ' + page + ' of ' + totalPages);
+    }
 
 
     function vibrate() {
@@ -45,45 +60,53 @@ function geronimo() {
     }
 
     /* AJAX stuff */
-    function getHighscore() {
-        setTimeout(ajax_get,30);
+    function getHighscore(page) {
+        highscorePage = page || 1;
+        setTimeout(function () { ajax_get(highscorePage); }, 30);
     }
 
-    function ajax_get() {
+    function ajax_get(page) {
         $.ajax({
            datatype: "json",
            type: "GET",
-           url: "highscores/list",
+              url: "highscores/list?page=" + page + "&pageSize=10&includeSimulated=" + game.showSimulatedUsers,
            success: function(msg){
+                 var rows = Array.isArray(msg) ? msg : (msg.items || []);
+                 highscorePage = msg.page || page;
+                 highscoreTotalPages = msg.totalPages || 1;
              $("#highscore-table tbody").text("");
-             for (var i = 0; i < msg.length; i++) {
-                var rank = i + 1;
-                // Can we make this shorter?
-                $("#highscore-table tbody").append("<tr><td id='rank'>" + rank + "</td><td id='playername'>" + msg[i]['name'] + "</td><td id='cloudprovider'>" + msg[i]['cloud'] + "</td><td id='zone'>" + msg[i]['zone'] + "</td><td id='host'>" + msg[i]['host'] + "</td><td id='score'>" + msg[i]['score'] + "</td></tr>");
+                 for (var i = 0; i < rows.length; i++) {
+                     var rank = (highscorePage - 1) * 10 + i + 1;
+                     $("#highscore-table tbody").append("<tr><td>" + rank + "</td><td>" + escapeHtml(rows[i]['name']) + "</td><td>" + escapeHtml(rows[i]['cloud']) + "</td><td>" + escapeHtml(rows[i]['zone']) + "</td><td>" + escapeHtml(rows[i]['host']) + "</td><td>" + escapeHtml(rows[i]['score']) + "</td></tr>");
              }
+                 renderPagination('#highscore-pagination', highscorePage, highscoreTotalPages);
            }
         });
     }
 
-    function getLiveStats() {
-        setTimeout(ajaxGetLiveStats, 30);
+    function getLiveStats(page) {
+        livestatsPage = page || 1;
+        setTimeout(function () { ajaxGetLiveStats(livestatsPage); }, 30);
     }
 
-    function ajaxGetLiveStats() {
+    function ajaxGetLiveStats(page) {
         $.ajax({
             datatype: "json",
             type: "GET",
-            url: "user/stats",
+            url: "user/stats?page=" + page + "&pageSize=" + game.liveStatsPageSize + "&includeSimulated=" + game.showSimulatedUsers,
             success: function(msg) {
+                var rows = Array.isArray(msg) ? msg : (msg.items || []);
+                livestatsPage = msg.page || page;
+                livestatsTotalPages = msg.totalPages || 1;
                 $("#livestats-table tbody").text("");
-                for (var i = 0; i < msg.length; i++) {
-                    var userId = i + 1;
-                    $("#livestats-table tbody").append("<tr><td id='userid'>" + userId + "</td><td id='cloudprovider'>" + msg[i]['cloud'] + "</td><td id='zone'>" + msg[i]['zone'] + "</td><td id='host'>" + msg[i]['host'] + "</td><td id='score'>" + msg[i]['score'] + "</td><td id='level'>" + msg[i]['level'] + "</td><td id='lives'>" + msg[i]['lives'] + "</td><td id='elapsedtime'>" + msg[i]['et'] + "</td><td id='txncount'>" + msg[i]['txncount'] + "</td></tr>");
+                for (var i = 0; i < rows.length; i++) {
+                    $("#livestats-table tbody").append("<tr><td>" + ((livestatsPage - 1) * game.liveStatsPageSize + i + 1) + "</td><td>" + escapeHtml(rows[i]['name']) + "</td><td>" + escapeHtml(rows[i]['cloud']) + "</td><td>" + escapeHtml(rows[i]['zone']) + "</td><td>" + escapeHtml(rows[i]['host']) + "</td><td>" + escapeHtml(rows[i]['score']) + "</td><td>" + escapeHtml(rows[i]['level']) + "</td><td>" + escapeHtml(rows[i]['lives']) + "</td><td>" + escapeHtml(rows[i]['et']) + "</td><td>" + escapeHtml(rows[i]['txncount']) + "</td></tr>");
                 }
+                renderPagination('#livestats-pagination', livestatsPage, livestatsTotalPages);
 
                 if (game.user.livestats) {
                     // Schedule ourselves again while user is viewing livestats
-                    setTimeout(ajaxGetLiveStats, game.databaseUpdateInterval * 1000);
+                    setTimeout(function () { ajaxGetLiveStats(livestatsPage); }, game.databaseUpdateInterval * 1000);
                 }
             }
         });
@@ -155,24 +178,25 @@ function geronimo() {
         $('#kubernetes-usage-info').toggle(!!(hasCloud && hasZone));
     }
 
-    function ajaxGetUserId() {
+    function ajaxGetUserId(name) {
         $.ajax({
             datatype: "json",
             type: "GET",
-            url: "user/id",
+            url: "user/id?name=" + encodeURIComponent(name || ''),
             success: function(msg){
                 game.user.id = msg;
             }
         });
     }
 
-    function ajaxUpdateUserStats(u, c, z, h, s, le, li, et) {
+    function ajaxUpdateUserStats(u, n, c, z, h, s, le, li, et) {
         $.ajax({
             type: "POST",
             datatype: "json",
             url: "user/stats",
             data: {
                 userId: u,
+                name: n,
                 cloud: c,
                 zone: z,
                 host: h,
@@ -191,14 +215,14 @@ function geronimo() {
     }
 
     function addHighscore() {
-        var name = $("input[type=text]").val();
+        var name = $("#playerName").val();
         $("#highscore-form").html("Saving highscore...");
         ajaxAdd(name, game.cloudProvider, game.zone, game.host,
                  game.score.score, game.level);
     }
 
-    function getUserId() {
-        setTimeout(ajaxGetUserId, 30);
+    function getUserId(name) {
+        setTimeout(function () { ajaxGetUserId(name); }, 30);
     }
 
     function getCloudMetadata() {
@@ -303,6 +327,13 @@ function geronimo() {
                 if (msg && msg.appVersion) game.appVersion = msg.appVersion;
                 if (msg && msg.appVariant) game.appVariant = msg.appVariant;
                 if (msg && msg.appColor) game.appColor = msg.appColor;
+                if (msg && Number.isInteger(msg.liveStatsPageSize) && msg.liveStatsPageSize > 0) {
+                    game.liveStatsPageSize = msg.liveStatsPageSize;
+                }
+                if (msg && typeof msg.simulatedUsersEnabled === 'boolean') {
+                    game.showSimulatedUsers = msg.simulatedUsersEnabled;
+                    $('#highscore-show-simulated, #livestats-show-simulated').prop('checked', game.showSimulatedUsers);
+                }
                 applyEbeeMode();
                 applyMaxLevel();
                 if ($('#settings-content').is(':visible')) {
@@ -457,7 +488,7 @@ function geronimo() {
     }
 
     function updateUserStats() {
-        ajaxUpdateUserStats(game.user.id, game.cloudProvider, game.zone, game.host,
+        ajaxUpdateUserStats(game.user.id, game.user.name, game.cloudProvider, game.zone, game.host,
                             game.score.score, game.level, pacman.lives,
                             game.timer.getElapsedTimeSecs());
     }
@@ -530,8 +561,15 @@ function geronimo() {
 
     function User() {
         this.id = 0;
+        this.name = '';
         this.sentUpdate = false;
         this.livestats = false;
+
+        this.resetSession = function () {
+            this.id = 0;
+            this.name = '';
+            this.sentUpdate = false;
+        };
 
         this.checkUpdateStats = function() {
             // Only send update once every time we hit databaseUpdateInterval
@@ -577,6 +615,8 @@ function geronimo() {
         this.appVersion = 'dev';
         this.appVariant = 'stable';
         this.appColor = '#ffcc00';
+        this.liveStatsPageSize = 10;
+        this.showSimulatedUsers = true;
         this.ciliumLogo = new Image();
         this.ciliumLogo.src = CILIUM_LOGO_SRC;
         this.kubernetesLogo = new Image();
@@ -689,6 +729,7 @@ function geronimo() {
             var r = confirm("Are you sure you want to restart?");
             if (r) {
                 console.log("new Game");
+                this.user.resetSession();
                 this.init(0);
                 this.pauseResume();
             }
@@ -825,7 +866,7 @@ function geronimo() {
                 : "<div id='invalid-score'>Your score looks fake, the highscore list is only for honest players ;)</div>";
             var title = this.ebeeMode ? (this.allLevelsCompleted ? "Hive secured" : "Flight over") : "Game over";
             this.showMessage(title, "Total Score: " + this.score.score + (HIGHSCORE_ENABLED ? inputHTML : ''));
-            if (scoreIsValid) $('#playerName').focus();
+            if (scoreIsValid) $('#playerName').val(this.user.name).focus();
         };
 
         this.showMessage = function(title, text) {
@@ -844,10 +885,12 @@ function geronimo() {
 
         this.pauseResume = function () {
             if (!this.running) {
-                // Get and store user ID
-                // TODO: create user ID once per client (leave here) or once
-                // per game (put in game.init)?
-                getUserId();
+                if (!this.user.name) {
+                    var name = window.prompt('Enter your name to start the game:');
+                    if (name === null || !name.trim()) return;
+                    this.user.name = name.trim().slice(0, 32);
+                }
+                getUserId(this.user.name);
                 // start timer
                 this.timer.start();
                 this.pause = false;
@@ -1834,6 +1877,25 @@ function checkAppCache() {
         $('body').on('click', '#show-highscore', function(){
             game.showContent('highscore-content');
             getHighscore();
+        });
+
+        $(document).on('change', '#highscore-show-simulated, #livestats-show-simulated', function () {
+            game.showSimulatedUsers = $(this).is(':checked');
+            if ($(this).is('#highscore-show-simulated')) {
+                getHighscore(1);
+            } else {
+                getLiveStats(1);
+            }
+        });
+
+        $(document).on('click', '#highscore-pagination [data-page-action]', function () {
+            if ($(this).is(':disabled')) return;
+            getHighscore($(this).data('page-action') === 'next' ? highscorePage + 1 : highscorePage - 1);
+        });
+
+        $(document).on('click', '#livestats-pagination [data-page-action]', function () {
+            if ($(this).is(':disabled')) return;
+            getLiveStats($(this).data('page-action') === 'next' ? livestatsPage + 1 : livestatsPage - 1);
         });
 
         // Hammerjs Touch Events

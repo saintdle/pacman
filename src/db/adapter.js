@@ -8,7 +8,7 @@
  *   { name, cloud, zone, host, score, level, date, referer, user_agent, hostname, ip_addr }
  *
  * UserStatsRecord:
- *   { id, cloud, zone, host, score, level, lives, elapsedTime, date,
+ *   { id, name, cloud, zone, host, score, level, lives, elapsedTime, date,
  *     referer, user_agent, hostname, ip_addr, updateCounter }
  *
  * Methods:
@@ -19,7 +19,7 @@
  *   insertScore(record)                -> Promise<void>
  *   createUser()                       -> Promise<{ id: string }>
  *   updateUserStats(id, patch)         -> Promise<void>
- *   listUserStats()                    -> Promise<UserStatsRecord[]>  (with score field set)
+ *   listUserStats(options)             -> Promise<UserStatsRecord[]>  (active rows with score)
  */
 export class DatabaseAdapter {
   async connect() {
@@ -31,19 +31,19 @@ export class DatabaseAdapter {
   async healthcheck() {
     throw new Error('healthcheck() not implemented');
   }
-  async listTopScores(_limit) {
+  async listTopScores(_limit, _options) {
     throw new Error('listTopScores() not implemented');
   }
   async insertScore(_record) {
     throw new Error('insertScore() not implemented');
   }
-  async createUser() {
+  async createUser(_name) {
     throw new Error('createUser() not implemented');
   }
   async updateUserStats(_id, _patch) {
     throw new Error('updateUserStats() not implemented');
   }
-  async listUserStats() {
+  async listUserStats(_options) {
     throw new Error('listUserStats() not implemented');
   }
 }

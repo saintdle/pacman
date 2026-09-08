@@ -84,6 +84,12 @@ const schema = z.object({
   // read-only. When true, the browser may store a local override.
   EBEE_MODE: boolish.default(false),
   ALLOW_CLIENT_EBEE_MODE_OVERRIDE: boolish.default(true),
+
+  // Live stats are activity-based. A session disappears after this many
+  // seconds without a stats update.
+  LIVE_STATS_MAX_AGE_SECONDS: z.coerce.number().int().positive().default(300),
+  LIVE_STATS_PAGE_SIZE: z.coerce.number().int().positive().max(100).default(10),
+  SIMULATED_USERS_ENABLED: boolish.default(false),
 });
 
 const parsed = schema.safeParse(process.env);
