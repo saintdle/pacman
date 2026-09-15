@@ -55,6 +55,9 @@ jobs:
         run: |
           set -euo pipefail
           kubectl kustomize k8s/examples > /tmp/pacman-kustomize.yaml
+          # Server-side dry-run does not persist a Namespace before validating
+          # resources that reference it, so create the disposable namespace first.
+          kubectl create namespace pacman-demo --dry-run=client -o yaml | kubectl apply -f -
           kubectl apply --dry-run=server -f /tmp/pacman-kustomize.yaml
           kubectl apply --dry-run=server -f k8s/examples/postgres-example.yaml
 
