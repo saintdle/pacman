@@ -17,7 +17,11 @@ export function healthRouter() {
   const router = Router();
 
   router.get('/healthz', (_req, res) => {
-    res.json({ status: 'ok' });
+    res.json({
+      status: 'ok',
+      version: config.APP_VERSION,
+      commit: config.COMMIT_SHA,
+    });
   });
 
   router.get('/readyz', async (req, res) => {
