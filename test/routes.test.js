@@ -21,6 +21,8 @@ test('GET /healthz returns ok', async () => {
   const res = await request(app).get('/healthz');
   assert.equal(res.status, 200);
   assert.equal(res.body.status, 'ok');
+  assert.equal(res.body.version, 'dev');
+  assert.equal(res.body.commit, 'unknown');
 });
 
 test('GET /readyz returns ready when adapter is healthy', async () => {
