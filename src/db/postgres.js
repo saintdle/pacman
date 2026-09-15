@@ -5,20 +5,32 @@ import { logger } from '../logger.js';
 
 const { Pool } = pg;
 
+export function createPostgresPoolOptions(cfg) {
+  return {
+    host: cfg.POSTGRES_HOST,
+    port: cfg.POSTGRES_PORT,
+    database: cfg.POSTGRES_DB,
+    user: cfg.POSTGRES_USER,
+    password: cfg.POSTGRES_PASSWORD,
+    max: cfg.POSTGRES_POOL_MAX ?? 10,
+    connectionTimeoutMillis: cfg.POSTGRES_CONNECTION_TIMEOUT_MS ?? 5000,
+    idleTimeoutMillis: cfg.POSTGRES_IDLE_TIMEOUT_MS ?? 30000,
+    statement_timeout: cfg.POSTGRES_STATEMENT_TIMEOUT_MS ?? 10000,
+    query_timeout: cfg.POSTGRES_QUERY_TIMEOUT_MS ?? 15000,
+    ssl: cfg.POSTGRES_SSL
+      ? {
+        rejectUnauthorized: cfg.POSTGRES_SSL_REJECT_UNAUTHORIZED ?? true,
+        ...(cfg.POSTGRES_SSL_CA ? { ca: cfg.POSTGRES_SSL_CA } : {}),
+      }
+      : false,
+  };
+}
+
 export class PostgresAdapter extends DatabaseAdapter {
   constructor(cfg, { pool } = {}) {
     super();
     this.cfg = cfg;
-    this.pool =
-      pool ??
-      new Pool({
-        host: cfg.POSTGRES_HOST,
-        port: cfg.POSTGRES_PORT,
-        database: cfg.POSTGRES_DB,
-        user: cfg.POSTGRES_USER,
-        password: cfg.POSTGRES_PASSWORD,
-        ssl: cfg.POSTGRES_SSL ? { rejectUnauthorized: false } : false,
-      });
+    this.pool = pool ?? new Pool(createPostgresPoolOptions(cfg));
   }
 
   async connect() {

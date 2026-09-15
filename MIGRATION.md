@@ -26,7 +26,14 @@ breaking changes are listed below.
 | `POSTGRES_DB`      | `pacman`      |                                            |
 | `POSTGRES_USER`    | `pacman`      |                                            |
 | `POSTGRES_PASSWORD`| `pacman`      |                                            |
-| `POSTGRES_SSL`     | `false`       | `true` enables TLS without cert validation |
+| `POSTGRES_SSL`     | `false`       | `true` enables TLS with certificate validation |
+| `POSTGRES_SSL_CA`  | unset         | Optional PEM CA bundle for PostgreSQL TLS |
+| `POSTGRES_SSL_REJECT_UNAUTHORIZED` | `true` | Allow disabling PostgreSQL certificate verification only for demos |
+| `POSTGRES_POOL_MAX` | `10`          | Maximum PostgreSQL connections |
+| `POSTGRES_CONNECTION_TIMEOUT_MS` | `5000` | Connection timeout |
+| `POSTGRES_IDLE_TIMEOUT_MS` | `30000` | Idle connection timeout |
+| `POSTGRES_STATEMENT_TIMEOUT_MS` | `10000` | Server-side statement timeout |
+| `POSTGRES_QUERY_TIMEOUT_MS` | `15000` | Client-side query timeout |
 
 Existing `MONGO_*` variables are preserved. See `.env.example` for the full list.
 

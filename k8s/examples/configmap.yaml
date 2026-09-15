@@ -8,7 +8,6 @@ data:
   ALLOW_CLIENT_CONFIG_OVERRIDE: "false"
   EBEE_MODE: "true"
   ALLOW_CLIENT_EBEE_MODE_OVERRIDE: "false"
-  APP_VERSION: "2.0.0"
   APP_VARIANT: "stable"
   APP_COLOR: "#ffcc00"
   DEMO_SECURITY_MODE: "true"

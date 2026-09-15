@@ -11,11 +11,13 @@ import { dirname, join } from 'node:path';
 import pg from 'pg';
 import { config } from '../config/index.js';
 import { logger } from '../logger.js';
+import { createPostgresPoolOptions } from './postgres.js';
 
 const { Pool } = pg;
 
 const here = dirname(fileURLToPath(import.meta.url));
 const migrationsDir = join(here, 'migrations', 'postgres');
+const migrationLockKey = 'pacman:schema_migrations';
 
 async function main() {
   if (config.DB_TYPE !== 'postgres') {
@@ -23,23 +25,22 @@ async function main() {
     return;
   }
 
-  const pool = new Pool({
-    host: config.POSTGRES_HOST,
-    port: config.POSTGRES_PORT,
-    database: config.POSTGRES_DB,
-    user: config.POSTGRES_USER,
-    password: config.POSTGRES_PASSWORD,
-    ssl: config.POSTGRES_SSL ? { rejectUnauthorized: false } : false,
-  });
+  const pool = new Pool(createPostgresPoolOptions(config));
+  let client;
+  let lockAcquired = false;
 
   try {
-    await pool.query(`CREATE TABLE IF NOT EXISTS schema_migrations (
+    client = await pool.connect();
+    await client.query('SELECT pg_advisory_lock(hashtext($1))', [migrationLockKey]);
+    lockAcquired = true;
+
+    await client.query(`CREATE TABLE IF NOT EXISTS schema_migrations (
       version TEXT PRIMARY KEY,
       applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
     )`);
 
     const files = (await readdir(migrationsDir)).filter((f) => f.endsWith('.sql')).sort();
-    const { rows: applied } = await pool.query('SELECT version FROM schema_migrations');
+    const { rows: applied } = await client.query('SELECT version FROM schema_migrations');
     const appliedSet = new Set(applied.map((r) => r.version));
 
     for (const file of files) {
@@ -48,7 +49,6 @@ async function main() {
         continue;
       }
       const sql = await readFile(join(migrationsDir, file), 'utf8');
-      const client = await pool.connect();
       try {
         await client.query('BEGIN');
         await client.query(sql);
@@ -59,11 +59,13 @@ async function main() {
         await client.query('ROLLBACK');
         logger.error({ file, err }, 'migration failed; rolled back');
         throw err;
-      } finally {
-        client.release();
       }
     }
   } finally {
+    if (client && lockAcquired) {
+      await client.query('SELECT pg_advisory_unlock(hashtext($1))', [migrationLockKey]);
+    }
+    client?.release();
     await pool.end();
   }
 }

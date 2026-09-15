@@ -15,6 +15,9 @@ ENV NODE_ENV=production \
   APP_VERSION=$APP_VERSION \
   COMMIT_SHA=$COMMIT_SHA \
   BUILD_DATE=$BUILD_DATE
+LABEL org.opencontainers.image.version=$APP_VERSION \
+      org.opencontainers.image.revision=$COMMIT_SHA \
+      org.opencontainers.image.created=$BUILD_DATE
 WORKDIR /app
 
 # Copy production deps and source
