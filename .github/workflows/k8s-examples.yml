@@ -29,8 +29,49 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v5
 
+      - name: Install Kind with checksum retries
+        env:
+          KIND_VERSION: v0.30.0
+        run: |
+          set -euo pipefail
+          case "$(uname -m)" in
+            x86_64) kind_arch=amd64 ;;
+            aarch64|arm64) kind_arch=arm64 ;;
+            *) echo "Unsupported runner architecture: $(uname -m)" >&2; exit 1 ;;
+          esac
+
+          kind_dir="${RUNNER_TOOL_CACHE}/kind/${KIND_VERSION}/${kind_arch}/kind/bin"
+          mkdir -p "$kind_dir"
+
+          for attempt in 1 2 3 4 5; do
+            temp_dir=$(mktemp -d)
+            if curl -fsSL --retry 3 --retry-all-errors --retry-delay 2 \
+                -o "$temp_dir/kind-linux-${kind_arch}" \
+                "https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-linux-${kind_arch}" \
+              && curl -fsSL --retry 3 --retry-all-errors --retry-delay 2 \
+                -o "$temp_dir/kind-linux-${kind_arch}.sha256sum" \
+                "https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-linux-${kind_arch}.sha256sum" \
+              && (
+                cd "$temp_dir"
+                grep -F "kind-linux-${kind_arch}" "kind-linux-${kind_arch}.sha256sum" | sha256sum -c --status
+              ); then
+              install -m 0755 "$temp_dir/kind-linux-${kind_arch}" "$kind_dir/kind"
+              rm -rf "$temp_dir"
+              exit 0
+            fi
+
+            rm -rf "$temp_dir"
+            echo "Kind download or checksum verification failed (attempt ${attempt}/5)." >&2
+            if (( attempt < 5 )); then
+              sleep 2
+            fi
+          done
+
+          echo "Unable to install Kind ${KIND_VERSION} after five checksum-verified attempts." >&2
+          exit 1
+
       - name: Create Kind cluster
-        uses: helm/kind-action@v1.12.0
+        uses: helm/kind-action@v1.15.0
         with:
           version: v0.30.0
           node_image: kindest/node:v1.31.4
