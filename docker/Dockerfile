@@ -29,6 +29,10 @@ COPY tools ./tools
 COPY views ./views
 COPY public ./public
 
+RUN apk upgrade --no-cache \
+  && rm -rf /usr/local/lib/node_modules/npm \
+  && rm -f /usr/local/bin/npm /usr/local/bin/npx
+
 # Drop privileges; group-root ownership lets arbitrary (OpenShift) UIDs read the app
 RUN addgroup -S app && adduser -S app -G app && chown -R app:0 /app && chmod -R g=u /app
 USER app
