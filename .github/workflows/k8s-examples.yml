@@ -1,0 +1,109 @@
+name: Kubernetes examples
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - "k8s/**"
+      - "docker/Dockerfile"
+      - ".github/workflows/k8s-examples.yml"
+  pull_request:
+    paths:
+      - "k8s/**"
+      - "docker/Dockerfile"
+      - ".github/workflows/k8s-examples.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: k8s-examples-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kind-smoke:
+    name: Build and smoke-test Kubernetes examples
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Create Kind cluster
+        uses: helm/kind-action@v1.12.0
+        with:
+          version: v0.30.0
+          node_image: kindest/node:v1.31.4
+
+      - name: Install kubeconform
+        run: |
+          set -euo pipefail
+          curl -fsSL https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz \
+            | tar -xz kubeconform
+          sudo mv kubeconform /usr/local/bin/kubeconform
+
+      - name: Install local storage provisioner
+        run: |
+          set -euo pipefail
+          kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.31/deploy/local-path-storage.yaml
+          kubectl patch storageclass local-path \
+            -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+          kubectl wait --for=condition=available deployment/local-path-provisioner \
+            -n local-path-storage --timeout=120s
+
+      - name: Validate core and optional manifests
+        run: |
+          set -euo pipefail
+          kubectl kustomize k8s/examples > /tmp/pacman-kustomize.yaml
+          # Server-side dry-run does not persist a Namespace before validating
+          # resources that reference it, so create the disposable namespace first.
+          kubectl create namespace pacman-demo --dry-run=client -o yaml | kubectl apply -f -
+          kubectl apply --dry-run=server -f /tmp/pacman-kustomize.yaml
+          kubectl apply --dry-run=server -f k8s/examples/postgres-example.yaml
+
+          # Optional policy and observability examples need their controller
+          # CRDs, so validate their Kubernetes shape without applying them to
+          # the plain Kind cluster.
+          kubeconform \
+            -strict \
+            -ignore-missing-schemas \
+            -kubernetes-version 1.31.0 \
+            k8s/examples/cilium-l7-policy.yaml \
+            k8s/examples/prometheus-servicemonitor.yaml \
+            k8s/examples/tetragon-tracingpolicy.yaml \
+            k8s/examples/overlays/cilium/cilium-l7-policy.yaml \
+            k8s/examples/overlays/prometheus/prometheus-servicemonitor.yaml \
+            k8s/examples/overlays/tetragon/tetragon-tracingpolicy.yaml
+
+      - name: Apply and smoke-test the generic multi-role example
+        run: |
+          set -euo pipefail
+          kubectl apply -k k8s/examples
+          for deployment in pacman-web pacman-score pacman-user; do
+            kubectl -n pacman-demo rollout status "deployment/$deployment" --timeout=180s
+          done
+          kubectl -n pacman-demo port-forward svc/pacman-web 18080:8080 > /tmp/pacman-web-port-forward.log 2>&1 &
+          port_forward_pid=$!
+          trap 'kill "$port_forward_pid" 2>/dev/null || true' EXIT
+          curl --fail --retry 15 --retry-all-errors --retry-delay 1 http://127.0.0.1:18080/healthz
+          curl --fail --retry 15 --retry-all-errors --retry-delay 1 http://127.0.0.1:18080/readyz
+
+      - name: Apply and smoke-test the PostgreSQL example
+        run: |
+          set -euo pipefail
+          kubectl apply -f k8s/examples/postgres-example.yaml
+          kubectl -n pacman-demo rollout status deployment/postgres --timeout=180s
+          kubectl -n pacman-demo wait --for=condition=complete job/pacman-postgres-migrate --timeout=180s
+          kubectl -n pacman-demo rollout status deployment/pacman-postgres --timeout=180s
+          kubectl -n pacman-demo port-forward svc/pacman-postgres 18081:8080 > /tmp/pacman-postgres-port-forward.log 2>&1 &
+          port_forward_pid=$!
+          trap 'kill "$port_forward_pid" 2>/dev/null || true' EXIT
+          curl --fail --retry 15 --retry-all-errors --retry-delay 1 http://127.0.0.1:18081/healthz
+          curl --fail --retry 15 --retry-all-errors --retry-delay 1 http://127.0.0.1:18081/readyz
+
+      - name: Collect cluster diagnostics
+        if: failure()
+        run: |
+          kubectl -n pacman-demo get pods,deployments,jobs,events --sort-by=.lastTimestamp || true
+          kubectl -n pacman-demo describe pods || true
+          cat /tmp/pacman-web-port-forward.log /tmp/pacman-postgres-port-forward.log 2>/dev/null || true

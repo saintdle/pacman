@@ -1,38 +1,34 @@
-gameConfig:
-  maxLevel: "10"
-  allowClientConfigOverride: "false"
-  ebeeMode: "true"
-  allowClientEbeeModeOverride: "false"
-  appVersion: "2.0.0"
-  appVariant: "stable"
-  appColor: "#ffcc00"
-  demoSecurityMode: "true"
-  demoTokenHeader: "x-demo-token"
-  demoToken: "pacman-demo"
+# Values fragment for the published Pac-Man Helm chart.
+# This file is not a Kubernetes manifest. Do not apply it with kubectl.
+# Chart source: https://github.com/saintdle/helm-charts/tree/main/charts/pacman
+# Repository: https://saintdle.github.io/helm-charts
+#
+# Example:
+#   helm upgrade --install pacman saintdle/pacman \
+#     --namespace pacman-demo --create-namespace \
+#     --values k8s/examples/helm-values.yaml
+
+database: mongo
 
 extraEnv:
   - name: MAX_LEVEL
-    value: "{{ .Values.gameConfig.maxLevel }}"
+    value: "10"
   - name: ALLOW_CLIENT_CONFIG_OVERRIDE
-    value: "{{ .Values.gameConfig.allowClientConfigOverride }}"
+    value: "false"
   - name: EBEE_MODE
-    value: "{{ .Values.gameConfig.ebeeMode }}"
+    value: "true"
   - name: ALLOW_CLIENT_EBEE_MODE_OVERRIDE
-    value: "{{ .Values.gameConfig.allowClientEbeeModeOverride }}"
-  - name: APP_VERSION
-    value: "{{ .Values.gameConfig.appVersion }}"
+    value: "false"
   - name: APP_VARIANT
-    value: "{{ .Values.gameConfig.appVariant }}"
+    value: stable
   - name: APP_COLOR
-    value: "{{ .Values.gameConfig.appColor }}"
+    value: "#ffcc00"
   - name: DEMO_SECURITY_MODE
-    value: "{{ .Values.gameConfig.demoSecurityMode }}"
+    value: "true"
   - name: DEMO_TOKEN_HEADER
-    value: "{{ .Values.gameConfig.demoTokenHeader }}"
+    value: x-demo-token
   - name: DEMO_TOKEN
-    value: "{{ .Values.gameConfig.demoToken }}"
+    value: pacman-demo
 
-serviceMonitor:
-  enabled: true
-  interval: 15s
-  path: /metrics
+service:
+  type: LoadBalancer

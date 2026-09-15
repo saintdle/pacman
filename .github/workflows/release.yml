@@ -1,0 +1,154 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pacman-release
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: docker.io/saintdle/pacman
+
+jobs:
+  release:
+    name: Build and publish release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run lint
+        run: npm run lint
+
+      - name: Run tests
+        run: npm test
+
+      - name: Resolve release version
+        id: version
+        env:
+          GITHUB_SHA: ${{ github.sha }}
+          RELEASE_BASE_SHA: ${{ github.event.before || '' }}
+        run: |
+          set -euo pipefail
+          release_output=$(node tools/resolve-release-version.js)
+          printf '%s\n' "$release_output" >> "$GITHUB_OUTPUT"
+          version=$(printf '%s\n' "$release_output" | awk -F= '$1 == "version" { print $2 }')
+          source=$(printf '%s\n' "$release_output" | awk -F= '$1 == "source" { print $2 }')
+          echo "Publishing Pac-Man $version ($source)"
+
+      - name: Ensure release tag is unused
+        if: steps.version.outputs.existing_release != 'true'
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code origin "refs/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release tag $RELEASE_TAG already exists" >&2
+            exit 1
+          fi
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and publish multi-architecture image
+        if: steps.version.outputs.existing_release != 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
+            ${{ env.IMAGE_NAME }}:latest
+          build-args: |
+            APP_VERSION=${{ steps.version.outputs.version }}
+            COMMIT_SHA=${{ github.sha }}
+            BUILD_DATE=${{ github.event.head_commit.timestamp || '' }}
+
+      - name: Verify published manifest list
+        id: image
+        env:
+          VERSION_TAG: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          version_digest=$(docker buildx imagetools inspect "$IMAGE_NAME:$VERSION_TAG" | awk '/^Digest:/ { print $2; exit }')
+          latest_digest=$(docker buildx imagetools inspect "$IMAGE_NAME:latest" | awk '/^Digest:/ { print $2; exit }')
+          test -n "$version_digest"
+          test "$version_digest" = "$latest_digest"
+          echo "image_digest=$version_digest" >> "$GITHUB_OUTPUT"
+          echo "Verified $IMAGE_NAME:$VERSION_TAG and $IMAGE_NAME:latest at $version_digest"
+
+      - name: Create GitHub release
+        if: steps.version.outputs.existing_release != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          IMAGE_DIGEST: ${{ steps.image.outputs.image_digest }}
+        run: |
+          set -euo pipefail
+          notes=$(mktemp)
+          cat > "$notes" <<EOF
+          Published Pac-Man ${RELEASE_VERSION}.
+
+          - Image: ${IMAGE_NAME}:${RELEASE_VERSION}
+          - Digest: ${IMAGE_DIGEST}
+          - Platforms: linux/amd64, linux/arm64
+          - latest points to the same manifest list.
+          EOF
+          gh release create "$RELEASE_TAG" \
+            --target "$GITHUB_SHA" \
+            --title "Pac-Man $RELEASE_VERSION" \
+            --notes-file "$notes"
+
+      - name: Dispatch Helm chart promotion
+        env:
+          RELEASE_AUTOMATION_TOKEN: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          IMAGE_DIGEST: ${{ steps.image.outputs.image_digest }}
+        run: |
+          set -euo pipefail
+          test -n "$RELEASE_AUTOMATION_TOKEN" || {
+            echo "RELEASE_AUTOMATION_TOKEN is required to promote helm-charts" >&2
+            exit 1
+          }
+          payload=$(jq -n \
+            --arg app_version "$RELEASE_VERSION" \
+            --arg image_digest "$IMAGE_DIGEST" \
+            --arg source_commit "$GITHUB_SHA" \
+            '{event_type: "pacman-release", client_payload: {app_version: $app_version, image_digest: $image_digest, source_commit: $source_commit}}')
+          curl --fail-with-body --silent --show-error \
+            -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $RELEASE_AUTOMATION_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/saintdle/helm-charts/dispatches \
+            -d "$payload"
