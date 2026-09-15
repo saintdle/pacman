@@ -44,6 +44,12 @@ for high and critical unfixed vulnerabilities. When findings are present, the
 workflow opens a GitHub issue containing the affected packages, versions,
 severity, and advisory links.
 
+Pull requests build the image locally and run the same Trivy policy before
+merge. Fixable HIGH or CRITICAL findings fail the `Scan pull request image`
+check, and same-repository pull requests also publish the SARIF results for
+review in GitHub code scanning. The image is not pushed to Docker Hub by this
+check.
+
 ## Running with a real database
 
 Use the Docker Compose stack and pick a profile:
