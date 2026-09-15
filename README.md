@@ -23,6 +23,23 @@ npm run dev        # in-memory DB, no extra services needed
 Open <http://localhost:8080> to play. High scores live for the lifetime of the
 process when `DB_TYPE=memory` (the default).
 
+## Releases
+
+Merging a pull request into `main` runs the release workflow. Unless the pull
+request changes the `version` field in `package.json`, the workflow increments
+the highest published Pac-Man release by one patch version. For example, a
+published `0.7.5` becomes `0.7.6` automatically.
+
+To request a minor or major release, change both `package.json` and
+`package-lock.json` in the pull request, for example from `0.7.5` to `0.8.0`.
+The reviewed `package.json` version is the release override. The workflow
+rejects an out-of-order version, an unsynchronised lockfile, or a reused release
+tag.
+
+Each release publishes one `linux/amd64` and `linux/arm64` manifest list under
+the version tag and moves `latest` to that same manifest list. The image is
+stamped with the release version, source commit, and build timestamp.
+
 ## Running with a real database
 
 Use the Docker Compose stack and pick a profile:
@@ -241,10 +258,13 @@ Example ConfigMap and patch files live under [`k8s/examples`](k8s/examples):
   [`overlays/tetragon`](k8s/examples/overlays/tetragon) apply optional
   CRD-backed resources only when those controllers are installed.
 - [`helm-values.yaml`](k8s/examples/helm-values.yaml) shows a Helm-style
-  values mapping for charts with an `extraEnv` pattern.
+  values fragment for the published
+  [`saintdle/pacman` Helm chart](https://github.com/saintdle/helm-charts/tree/main/charts/pacman).
+  It is not a raw manifest and should be passed to Helm, not `kubectl`.
 - [`values-openshift.yaml`](k8s/examples/values-openshift.yaml) documents the
-  OpenShift override values for the Pac-Man Helm chart (`openShift.enabled` and
-  `openShift.sccRoleBinding.create`).
+  OpenShift override values for that chart (`openShift.enabled` and
+  `openShift.sccRoleBinding.create`). The complete chart values schema lives in
+  the [`helm-charts` repository](https://github.com/saintdle/helm-charts).
 - [`ebee-mode-rollout-patch.yaml`](k8s/examples/ebee-mode-rollout-patch.yaml)
   flips eBee mode on and bumps a pod-template annotation to force a rollout.
 

@@ -6,9 +6,15 @@ COPY package.json package-lock.json* ./
 RUN npm ci --omit=dev
 
 FROM node:22-alpine AS runtime
+ARG APP_VERSION=dev
+ARG COMMIT_SHA=unknown
+ARG BUILD_DATE=unknown
 ENV NODE_ENV=production \
     PORT=8080 \
-    HOST=0.0.0.0
+  HOST=0.0.0.0 \
+  APP_VERSION=$APP_VERSION \
+  COMMIT_SHA=$COMMIT_SHA \
+  BUILD_DATE=$BUILD_DATE
 WORKDIR /app
 
 # Copy production deps and source

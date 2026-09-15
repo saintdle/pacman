@@ -1,11 +1,12 @@
 # OpenShift override values for the Pac-Man Helm chart
-# (chart: infra-charts/pacman, https://github.com/saintdle/helm-charts)
+# (chart: saintdle/pacman, https://github.com/saintdle/helm-charts)
 #
 # The chart auto-detects OpenShift and, on the restricted-v2 SCC, drops the
 # fixed runAsUser/runAsGroup/fsGroup from every pod so the SCC can inject a
 # namespace-allocated UID. In most cases you need NO overrides at all:
 #
-#   helm install pacman infra-charts/pacman
+#   helm repo add saintdle https://saintdle.github.io/helm-charts
+#   helm install pacman saintdle/pacman
 #
 # This file documents the two knobs you may want on OpenShift.
 
