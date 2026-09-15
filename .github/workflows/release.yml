@@ -148,57 +148,65 @@ jobs:
       - name: Open vulnerability issue
         if: ${{ always() && steps.version.outputs.existing_release != 'true' }}
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
           RELEASE_TAG: ${{ steps.version.outputs.tag }}
           SOURCE_COMMIT: ${{ github.sha }}
           IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
-        run: |
-          set -euo pipefail
-          if [[ ! -s trivy-results.json ]]; then
-            echo "::warning::Trivy did not produce a result file; no vulnerability issue created."
-            exit 0
-          fi
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('node:fs');
+            const report = JSON.parse(fs.readFileSync('trivy-results.json', 'utf8'));
+            const vulnerabilities = (report.Results ?? []).flatMap((result) => result.Vulnerabilities ?? []);
 
-          vulnerability_count=$(jq '[.Results[]?.Vulnerabilities[]?] | length' trivy-results.json)
-          if [[ "$vulnerability_count" -eq 0 ]]; then
-            echo "Trivy found no reportable vulnerabilities."
-            exit 0
-          fi
+            if (vulnerabilities.length === 0) {
+              core.info('Trivy found no reportable vulnerabilities.');
+              return;
+            }
 
-          issue_title="Security: vulnerabilities in ${IMAGE_NAME}:${RELEASE_VERSION}"
-          existing_issue=$(gh issue list \
-            --state open \
-            --limit 100 \
-            --json number,title \
-            | jq -r --arg title "$issue_title" '.[] | select(.title == $title) | .number' \
-            | head -n 1)
-          if [[ -n "$existing_issue" ]]; then
-            echo "Vulnerability issue #$existing_issue already exists for $RELEASE_VERSION."
-            exit 0
-          fi
+            const { IMAGE_NAME, RELEASE_VERSION, RELEASE_TAG, SOURCE_COMMIT, IMAGE_DIGEST } = process.env;
+            const issueTitle = `Security: vulnerabilities in ${IMAGE_NAME}:${RELEASE_VERSION}`;
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 100,
+            });
 
-          vulnerability_details=$(jq -r '
-            [.Results[]?.Vulnerabilities[]?]
-            | sort_by(.Severity, .VulnerabilityID)
-            | .[]
-            | "- **\(.VulnerabilityID)** (\(.Severity)) in `\(.PkgName)` \(.InstalledVersion) -> \(.FixedVersion // "no fixed version")\n  \(.Title // "No title")\n  \(.PrimaryURL // "No advisory URL")"
-          ' trivy-results.json)
+            if (issues.some((issue) => issue.title === issueTitle)) {
+              core.info(`Vulnerability issue already exists for ${RELEASE_VERSION}.`);
+              return;
+            }
 
-          {
-            printf '%s\n\n' '## Trivy vulnerability report'
-            printf 'The release image contains **%s** reportable vulnerability(ies).\n\n' "$vulnerability_count"
-            printf '%s\n\n' "- Image: ${IMAGE_NAME}:${RELEASE_VERSION}"
-            printf '%s\n\n' "- Digest: ${IMAGE_NAME}@${IMAGE_DIGEST:-unknown}"
-            printf '%s\n\n' "- Release: [${RELEASE_TAG}](https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG})"
-            printf '%s\n\n' "- Source commit: [${SOURCE_COMMIT}](https://github.com/${GITHUB_REPOSITORY}/commit/${SOURCE_COMMIT})"
-            printf '%s\n\n' 'The scan is configured for HIGH and CRITICAL vulnerabilities with available fixes.'
-            printf '%s\n' "$vulnerability_details"
-          } > vulnerability-issue.md
+            const details = vulnerabilities
+              .sort((left, right) => `${left.Severity}:${left.VulnerabilityID}`.localeCompare(`${right.Severity}:${right.VulnerabilityID}`))
+              .map((vulnerability) => [
+                `- **${vulnerability.VulnerabilityID}** (${vulnerability.Severity}) in \`${vulnerability.PkgName}\` ${vulnerability.InstalledVersion} -> ${vulnerability.FixedVersion ?? 'no fixed version'}`,
+                `  ${vulnerability.Title ?? 'No title'}`,
+                `  ${vulnerability.PrimaryURL ?? 'No advisory URL'}`,
+              ].join('\n'))
+              .join('\n');
 
-          gh issue create \
-            --title "$issue_title" \
-            --body-file vulnerability-issue.md
+            const body = [
+              '## Trivy vulnerability report',
+              `The release image contains **${vulnerabilities.length}** reportable vulnerability(ies).`,
+              `- Image: ${IMAGE_NAME}:${RELEASE_VERSION}`,
+              `- Digest: ${IMAGE_NAME}@${IMAGE_DIGEST ?? 'unknown'}`,
+              `- Release: [${RELEASE_TAG}](https://github.com/${context.repo.owner}/${context.repo.repo}/releases/tag/${RELEASE_TAG})`,
+              `- Source commit: [${SOURCE_COMMIT}](https://github.com/${context.repo.owner}/${context.repo.repo}/commit/${SOURCE_COMMIT})`,
+              'The scan is configured for HIGH and CRITICAL vulnerabilities with available fixes.',
+              details,
+            ].join('\n\n');
+
+            const { data: issue } = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: issueTitle,
+              body,
+            });
+            core.info(`Created vulnerability issue #${issue.number}: ${issue.html_url}`);
 
       - name: Verify published manifest list
         id: image
