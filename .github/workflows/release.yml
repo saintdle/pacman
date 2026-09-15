@@ -99,10 +99,44 @@ jobs:
           VERSION_TAG: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          version_digest=$(docker buildx imagetools inspect "$IMAGE_NAME:$VERSION_TAG" | awk '/^Digest:/ { print $2; exit }')
-          latest_digest=$(docker buildx imagetools inspect "$IMAGE_NAME:latest" | awk '/^Digest:/ { print $2; exit }')
-          test -n "$version_digest"
-          test "$version_digest" = "$latest_digest"
+          inspect_digest() {
+            local reference="$1"
+            local attempt
+            local output
+            local exit_code
+            local digest
+
+            for attempt in 1 2 3 4 5; do
+              if output=$(docker buildx imagetools inspect "$reference" 2>&1); then
+                digest=$(printf '%s\n' "$output" | awk '/^Digest:/ { print $2; exit }')
+                if [[ -n "$digest" ]]; then
+                  printf '%s\n' "$digest"
+                  return 0
+                fi
+                echo "Attempt $attempt: no digest returned for $reference" >&2
+              else
+                exit_code=$?
+                echo "Attempt $attempt: failed to inspect $reference (exit $exit_code)" >&2
+                printf '%s\n' "$output" >&2
+              fi
+              if (( attempt < 5 )); then sleep 10; fi
+            done
+
+            return 1
+          }
+
+          if ! version_digest=$(inspect_digest "$IMAGE_NAME:$VERSION_TAG"); then
+            echo "Unable to inspect $IMAGE_NAME:$VERSION_TAG after 5 attempts" >&2
+            exit 1
+          fi
+          if ! latest_digest=$(inspect_digest "$IMAGE_NAME:latest"); then
+            echo "Unable to inspect $IMAGE_NAME:latest after 5 attempts" >&2
+            exit 1
+          fi
+          if [[ "$version_digest" != "$latest_digest" ]]; then
+            echo "Manifest digest mismatch: $IMAGE_NAME:$VERSION_TAG=$version_digest, $IMAGE_NAME:latest=$latest_digest" >&2
+            exit 1
+          fi
           echo "image_digest=$version_digest" >> "$GITHUB_OUTPUT"
           echo "Verified $IMAGE_NAME:$VERSION_TAG and $IMAGE_NAME:latest at $version_digest"
 
