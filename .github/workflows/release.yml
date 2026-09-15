@@ -7,6 +7,9 @@ on:
 
 permissions:
   contents: write
+  issues: write
+  id-token: write
+  attestations: write
 
 concurrency:
   group: pacman-release
@@ -20,6 +23,15 @@ jobs:
     name: Build and publish release
     runs-on: ubuntu-latest
     steps:
+      - name: Validate manual release ref
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main" || {
+            echo "Manual releases must target the main branch (got $GITHUB_REF)" >&2
+            exit 1
+          }
+
       - name: Check out source
         uses: actions/checkout@v5
         with:
@@ -53,6 +65,22 @@ jobs:
           source=$(printf '%s\n' "$release_output" | awk -F= '$1 == "source" { print $2 }')
           echo "Publishing Pac-Man $version ($source)"
 
+      - name: Write release metadata
+        if: steps.version.outputs.existing_release != 'true'
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg version "$RELEASE_VERSION" \
+            --arg tag "$RELEASE_TAG" \
+            --arg commit "$SOURCE_COMMIT" \
+            '{version: $version, tag: $tag, commit: $commit}' \
+            > release-metadata.json
+          cat release-metadata.json
+
       - name: Ensure release tag is unused
         if: steps.version.outputs.existing_release != 'true'
         env:
@@ -78,6 +106,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build and publish multi-architecture image
+        id: build
         if: steps.version.outputs.existing_release != 'true'
         uses: docker/build-push-action@v6
         with:
@@ -92,6 +121,84 @@ jobs:
             APP_VERSION=${{ steps.version.outputs.version }}
             COMMIT_SHA=${{ github.sha }}
             BUILD_DATE=${{ github.event.head_commit.timestamp || '' }}
+          provenance: mode=max
+          sbom: true
+
+      - name: Attest published image
+        if: steps.version.outputs.existing_release != 'true'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Scan published image for vulnerabilities
+        id: trivy
+        if: steps.version.outputs.existing_release != 'true'
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
+          format: json
+          output: trivy-results.json
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '1'
+
+      - name: Open vulnerability issue
+        if: ${{ always() && steps.version.outputs.existing_release != 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          SOURCE_COMMIT: ${{ github.sha }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          if [[ ! -s trivy-results.json ]]; then
+            echo "::warning::Trivy did not produce a result file; no vulnerability issue created."
+            exit 0
+          fi
+
+          vulnerability_count=$(jq '[.Results[]?.Vulnerabilities[]?] | length' trivy-results.json)
+          if [[ "$vulnerability_count" -eq 0 ]]; then
+            echo "Trivy found no reportable vulnerabilities."
+            exit 0
+          fi
+
+          issue_title="Security: vulnerabilities in ${IMAGE_NAME}:${RELEASE_VERSION}"
+          existing_issue=$(gh issue list \
+            --state open \
+            --limit 100 \
+            --json number,title \
+            | jq -r --arg title "$issue_title" '.[] | select(.title == $title) | .number' \
+            | head -n 1)
+          if [[ -n "$existing_issue" ]]; then
+            echo "Vulnerability issue #$existing_issue already exists for $RELEASE_VERSION."
+            exit 0
+          fi
+
+          vulnerability_details=$(jq -r '
+            [.Results[]?.Vulnerabilities[]?]
+            | sort_by(.Severity, .VulnerabilityID)
+            | .[]
+            | "- **\(.VulnerabilityID)** (\(.Severity)) in `\(.PkgName)` \(.InstalledVersion) -> \(.FixedVersion // "no fixed version")\n  \(.Title // "No title")\n  \(.PrimaryURL // "No advisory URL")"
+          ' trivy-results.json)
+
+          {
+            printf '%s\n\n' '## Trivy vulnerability report'
+            printf 'The release image contains **%s** reportable vulnerability(ies).\n\n' "$vulnerability_count"
+            printf '%s\n\n' "- Image: ${IMAGE_NAME}:${RELEASE_VERSION}"
+            printf '%s\n\n' "- Digest: ${IMAGE_NAME}@${IMAGE_DIGEST:-unknown}"
+            printf '%s\n\n' "- Release: [${RELEASE_TAG}](https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG})"
+            printf '%s\n\n' "- Source commit: [${SOURCE_COMMIT}](https://github.com/${GITHUB_REPOSITORY}/commit/${SOURCE_COMMIT})"
+            printf '%s\n\n' 'The scan is configured for HIGH and CRITICAL vulnerabilities with available fixes.'
+            printf '%s\n' "$vulnerability_details"
+          } > vulnerability-issue.md
+
+          gh issue create \
+            --title "$issue_title" \
+            --body-file vulnerability-issue.md
 
       - name: Verify published manifest list
         id: image
@@ -140,6 +247,16 @@ jobs:
           echo "image_digest=$version_digest" >> "$GITHUB_OUTPUT"
           echo "Verified $IMAGE_NAME:$VERSION_TAG and $IMAGE_NAME:latest at $version_digest"
 
+      - name: Install Cosign
+        if: steps.version.outputs.existing_release != 'true'
+        uses: sigstore/cosign-installer@v3.8.1
+
+      - name: Sign published image digest
+        if: steps.version.outputs.existing_release != 'true'
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.image_digest }}
+        run: cosign sign --yes "$IMAGE_NAME@$IMAGE_DIGEST"
+
       - name: Create GitHub release
         if: steps.version.outputs.existing_release != 'true'
         env:
@@ -156,9 +273,11 @@ jobs:
           - Image: ${IMAGE_NAME}:${RELEASE_VERSION}
           - Digest: ${IMAGE_DIGEST}
           - Platforms: linux/amd64, linux/arm64
+          - Image provenance, SBOM, and keyless signature published with the image.
           - latest points to the same manifest list.
           EOF
           gh release create "$RELEASE_TAG" \
+            release-metadata.json \
             --target "$GITHUB_SHA" \
             --title "Pac-Man $RELEASE_VERSION" \
             --notes-file "$notes"

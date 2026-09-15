@@ -4,7 +4,8 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import pg from 'pg';
-import { PostgresAdapter } from '../../src/db/postgres.js';
+import { MongoAdapter } from '../../src/db/mongo.js';
+import { PostgresAdapter, createPostgresPoolOptions } from '../../src/db/postgres.js';
 
 const enabled = process.env.RUN_ADAPTER_TESTS === '1';
 const here = dirname(fileURLToPath(import.meta.url));
@@ -12,6 +13,40 @@ const migration = join(here, '..', '..', 'src', 'db', 'migrations', 'postgres', 
 
 let adapter;
 let container;
+
+test('postgres pool options bound connections and validate TLS by default', () => {
+  const options = createPostgresPoolOptions({
+    POSTGRES_HOST: 'db',
+    POSTGRES_PORT: 5432,
+    POSTGRES_DB: 'pacman',
+    POSTGRES_USER: 'pacman',
+    POSTGRES_PASSWORD: 'secret',
+    POSTGRES_SSL: true,
+  });
+
+  assert.equal(options.max, 10);
+  assert.equal(options.connectionTimeoutMillis, 5000);
+  assert.equal(options.idleTimeoutMillis, 30000);
+  assert.equal(options.statement_timeout, 10000);
+  assert.equal(options.query_timeout, 15000);
+  assert.deepEqual(options.ssl, { rejectUnauthorized: true });
+});
+
+test('mongo options bound pools and timeouts', () => {
+  const adapter = new MongoAdapter({
+    MONGO_SERVICE_HOST: 'db',
+    MY_MONGO_PORT: 27017,
+    MONGO_DATABASE: 'pacman',
+    MONGO_USE_SSL: false,
+  });
+
+  assert.equal(adapter.options.maxPoolSize, 10);
+  assert.equal(adapter.options.minPoolSize, 0);
+  assert.equal(adapter.options.connectTimeoutMS, 10000);
+  assert.equal(adapter.options.serverSelectionTimeoutMS, 5000);
+  assert.equal(adapter.options.socketTimeoutMS, 30000);
+  assert.equal(adapter.options.waitQueueTimeoutMS, 5000);
+});
 
 before(async () => {
   if (!enabled) return;

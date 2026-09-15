@@ -18,7 +18,15 @@ function buildUrl(cfg) {
 }
 
 function buildOptions(cfg) {
-  const options = { readPreference: 'secondaryPreferred' };
+  const options = {
+    readPreference: 'secondaryPreferred',
+    maxPoolSize: cfg.MONGO_MAX_POOL_SIZE ?? 10,
+    minPoolSize: cfg.MONGO_MIN_POOL_SIZE ?? 0,
+    connectTimeoutMS: cfg.MONGO_CONNECT_TIMEOUT_MS ?? 10000,
+    serverSelectionTimeoutMS: cfg.MONGO_SERVER_SELECTION_TIMEOUT_MS ?? 5000,
+    socketTimeoutMS: cfg.MONGO_SOCKET_TIMEOUT_MS ?? 30000,
+    waitQueueTimeoutMS: cfg.MONGO_WAIT_QUEUE_TIMEOUT_MS ?? 5000,
+  };
   if (cfg.MONGO_REPLICA_SET) options.replicaSet = cfg.MONGO_REPLICA_SET;
   if (cfg.MONGO_USE_SSL) {
     options.tls = true;

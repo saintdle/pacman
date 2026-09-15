@@ -11,6 +11,10 @@ async function main() {
   try {
     await db.connect();
   } catch (err) {
+    if (config.FAIL_FAST_ON_DB_CONNECT) {
+      logger.fatal({ err }, 'database connect failed; exiting because fail-fast mode is enabled');
+      throw err;
+    }
     logger.error({ err }, 'database connect failed; continuing in degraded state');
   }
 

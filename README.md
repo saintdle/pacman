@@ -38,7 +38,11 @@ tag.
 
 Each release publishes one `linux/amd64` and `linux/arm64` manifest list under
 the version tag and moves `latest` to that same manifest list. The image is
-stamped with the release version, source commit, and build timestamp.
+stamped with the release version, source commit, and build timestamp. Releases
+also publish SBOM and provenance attestations and run an advisory Trivy scan
+for high and critical unfixed vulnerabilities. When findings are present, the
+workflow opens a GitHub issue containing the affected packages, versions,
+severity, and advisory links.
 
 ## Running with a real database
 
@@ -233,8 +237,9 @@ Example ConfigMap and patch files live under [`k8s/examples`](k8s/examples):
 
 - [`configmap.yaml`](k8s/examples/configmap.yaml) sets `MAX_LEVEL`,
   `ALLOW_CLIENT_CONFIG_OVERRIDE`, `EBEE_MODE`,
-  `ALLOW_CLIENT_EBEE_MODE_OVERRIDE`, `APP_VERSION`, `APP_VARIANT`,
-  `APP_COLOR`, and `DEMO_SECURITY_MODE`.
+  `ALLOW_CLIENT_EBEE_MODE_OVERRIDE`, `APP_VARIANT`, `APP_COLOR`, and
+  `DEMO_SECURITY_MODE`. `APP_VERSION` is intentionally omitted so the value
+  stamped into the image by the release workflow remains authoritative.
 - [`deployment-env-patch.yaml`](k8s/examples/deployment-env-patch.yaml)
   wires those values into a Deployment via `envFrom`.
 - [`multi-role-deployment.yaml`](k8s/examples/multi-role-deployment.yaml)

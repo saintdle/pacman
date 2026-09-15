@@ -12,6 +12,9 @@ const schema = z.object({
   HOST: z.string().default('0.0.0.0'),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
   DB_TYPE: z.enum(['memory', 'mongo', 'postgres']).default('memory'),
+  // Keep the in-memory demo convenient, but fail fast for production-like
+  // database deployments unless degraded startup is explicitly requested.
+  FAIL_FAST_ON_DB_CONNECT: boolish.optional(),
 
   // Demo/runtime metadata. APP_ROLE lets one image run separate Kubernetes
   // workloads for east-west, Gateway API, and Tetragon demos.
@@ -42,6 +45,12 @@ const schema = z.object({
   MONGO_REPLICA_SET: z.string().optional(),
   MONGO_USE_SSL: boolish.default(false),
   MONGO_VALIDATE_SSL: boolish.default(true),
+  MONGO_MAX_POOL_SIZE: z.coerce.number().int().positive().default(10),
+  MONGO_MIN_POOL_SIZE: z.coerce.number().int().nonnegative().default(0),
+  MONGO_CONNECT_TIMEOUT_MS: z.coerce.number().int().positive().default(10000),
+  MONGO_SERVER_SELECTION_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
+  MONGO_SOCKET_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
+  MONGO_WAIT_QUEUE_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
 
   // Postgres
   POSTGRES_HOST: z.string().default('localhost'),
@@ -50,6 +59,13 @@ const schema = z.object({
   POSTGRES_USER: z.string().default('pacman'),
   POSTGRES_PASSWORD: z.string().default('pacman'),
   POSTGRES_SSL: boolish.default(false),
+  POSTGRES_SSL_CA: z.string().optional(),
+  POSTGRES_SSL_REJECT_UNAUTHORIZED: boolish.default(true),
+  POSTGRES_POOL_MAX: z.coerce.number().int().positive().default(10),
+  POSTGRES_CONNECTION_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
+  POSTGRES_IDLE_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
+  POSTGRES_STATEMENT_TIMEOUT_MS: z.coerce.number().int().positive().default(10000),
+  POSTGRES_QUERY_TIMEOUT_MS: z.coerce.number().int().positive().default(15000),
 
   // Gameplay
   // MAX_LEVEL caps how far Pac-Man can progress. Accepts a positive integer
@@ -98,5 +114,9 @@ if (!parsed.success) {
   throw new Error('Invalid environment configuration');
 }
 
-export const config = parsed.data;
+export const config = {
+  ...parsed.data,
+  FAIL_FAST_ON_DB_CONNECT:
+    parsed.data.FAIL_FAST_ON_DB_CONNECT ?? (parsed.data.NODE_ENV === 'production' && parsed.data.DB_TYPE !== 'memory'),
+};
 export default config;
