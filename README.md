@@ -119,6 +119,24 @@ details from Service annotations or EndpointSlice hints when available, then
 falls back to the node zone label. All probes have short timeouts; failure
 falls through to `{cloud: "unknown", zone: "unknown"}`.
 
+### Proxy and readiness settings
+
+`TRUST_PROXY` defaults to `false`, so forwarded client-address headers are not
+trusted. Set it only to match the real ingress: use a non-negative hop count or
+a comma-separated list of proxy IPs, CIDRs, or named ranges (`loopback`,
+`linklocal`, `uniquelocal`). Named ranges are normalized case-insensitively.
+Direct external requests that supply forwarding headers are not trusted by the
+default setting.
+
+`READINESS_CHECK_UPSTREAMS` defaults to `false`. When enabled on the web role,
+`/readyz` checks configured upstream services' `/readyz` endpoints in parallel,
+with a 750 ms timeout per request and a one-hop probe marker to prevent cycles.
+The multi-role Kubernetes example enables this option. Upstream-aware readiness
+can remove a web pod from service while a backend is unavailable; leave it off
+when readiness should reflect only the local database. `/readyz/details` always
+includes web-role upstream probes. `/healthz` remains a liveness check and does
+not check the database.
+
 ### `POST /highscores` validation
 
 The HTTP route accepts JSON and form-encoded bodies. Submit `name`, `cloud`,
@@ -146,24 +164,6 @@ accepted with a valid level, while an absent level decodes to zero and is
 rejected. Fractions and unsafe integers cannot be sent as such in that wire
 format. Treat the cap as a plausibility check; it does not prove that a score
 is authentic.
-
-### Proxy and readiness settings
-
-`TRUST_PROXY` defaults to `false`, so forwarded client-address headers are not
-trusted. Set it only to match the real ingress: use a non-negative hop count or
-a comma-separated list of proxy IPs, CIDRs, or named ranges (`loopback`,
-`linklocal`, `uniquelocal`). Named ranges are normalized case-insensitively.
-Direct external requests that supply forwarding headers are not trusted by the
-default setting.
-
-`READINESS_CHECK_UPSTREAMS` defaults to `false`. When enabled on the web role,
-`/readyz` checks configured upstream services' `/readyz` endpoints in parallel,
-with a 750 ms timeout per request and a one-hop probe marker to prevent cycles.
-The multi-role Kubernetes example enables this option. Upstream-aware readiness
-can remove a web pod from service while a backend is unavailable; leave it off
-when readiness should reflect only the local database. `/readyz/details` always
-includes web-role upstream probes. `/healthz` remains a liveness check and does
-not check the database.
 
 Examples:
 
