@@ -6,8 +6,10 @@ const boolish = z
   .union([z.string(), z.boolean()])
   .transform((v) => (typeof v === 'boolean' ? v : ['1', 'true', 'yes', 'on'].includes(v.toLowerCase())));
 
+const EXPRESS_PROXY_RANGES = ['loopback', 'linklocal', 'uniquelocal'];
+
 function validProxySubnet(value) {
-  if (['loopback', 'linklocal', 'uniquelocal'].includes(value.toLowerCase())) return true;
+  if (EXPRESS_PROXY_RANGES.includes(value.toLowerCase())) return true;
 
   const [address, prefix, ...extra] = value.split('/');
   const addressFamily = isIP(address);
@@ -26,7 +28,10 @@ const trustProxy = z.string().default('false').transform((value, ctx) => {
     const hops = Number(normalized);
     if (Number.isSafeInteger(hops)) return hops;
   } else {
-    const subnets = normalized.split(',').map((subnet) => subnet.trim());
+    const subnets = normalized.split(',').map((subnet) => {
+      const trimmed = subnet.trim();
+      return EXPRESS_PROXY_RANGES.includes(trimmed.toLowerCase()) ? trimmed.toLowerCase() : trimmed;
+    });
     if (subnets.length > 0 && subnets.every((subnet) => subnet && validProxySubnet(subnet))) return subnets;
   }
 

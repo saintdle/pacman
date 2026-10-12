@@ -45,6 +45,13 @@ import { config } from './src/config/index.js';
 process.stdout.write(JSON.stringify({ trustProxy: config.TRUST_PROXY, checkUpstreams: config.READINESS_CHECK_UPSTREAMS }));
 `;
 
+const appTrustProxyScript = `
+import { config } from './src/config/index.js';
+import { createApp } from './src/app.js';
+createApp({ db: {} });
+process.stdout.write(JSON.stringify({ trustProxy: config.TRUST_PROXY }));
+`;
+
 test('GET /config advertises allowClientOverride=false when locked', () => {
   const out = runWithEnv({ ALLOW_CLIENT_CONFIG_OVERRIDE: 'false' }, childScript);
   assert.equal(out.getStatus, 200);
@@ -93,4 +100,12 @@ test('TRUST_PROXY rejects invalid and blanket true configuration', () => {
     assert.notEqual(res.status, 0, `TRUST_PROXY=${value} should fail configuration validation`);
     assert.match(res.stderr, /Invalid environment configuration/);
   }
+});
+
+test('TRUST_PROXY normalizes mixed-case Express range aliases before app initialization', () => {
+  const upper = runWithEnv({ TRUST_PROXY: 'LOOPBACK' }, appTrustProxyScript);
+  assert.deepEqual(upper.trustProxy, ['loopback']);
+
+  const mixed = runWithEnv({ TRUST_PROXY: 'LoopBack,UniQueLocal,10.0.0.0/8' }, appTrustProxyScript);
+  assert.deepEqual(mixed.trustProxy, ['loopback', 'uniquelocal', '10.0.0.0/8']);
 });
