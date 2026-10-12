@@ -18,7 +18,7 @@
     "simulate:users": "node tools/simulate-users.js"
   },
   "dependencies": {
-    "@grpc/grpc-js": "^1.14.4",
+    "@grpc/grpc-js": "^1.14.5",
     "@grpc/proto-loader": "^0.8.1",
     "dotenv": "^16.4.5",
     "express": "^5.0.1",
