@@ -2,6 +2,8 @@ import grpc from '@grpc/grpc-js';
 import protoLoader from '@grpc/proto-loader';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { config } from '../config/index.js';
+import { parseScoreSubmission } from '../routes/score-validation.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const protoPath = path.resolve(here, '../../proto/pacman.proto');
@@ -16,18 +18,30 @@ const packageDefinition = protoLoader.loadSync(protoPath, {
 
 export const pacmanProto = grpc.loadPackageDefinition(packageDefinition).pacman;
 
-export function createScoreService(db) {
+function statusError(code, message) {
+  const err = new Error(message);
+  err.code = code;
+  return err;
+}
+
+export function createScoreService(db, { logger, maxLevel = config.MAX_LEVEL } = {}) {
   return {
     async submitScore(call, callback) {
+      const req = call.request;
+      const submission = parseScoreSubmission(req.score, req.level, maxLevel);
+      if (submission.error) {
+        callback(statusError(grpc.status.INVALID_ARGUMENT, submission.error));
+        return;
+      }
+
       try {
-        const req = call.request;
         await db.insertScore({
-          name: req.name,
-          cloud: req.cloud,
-          zone: req.zone,
-          host: req.host,
-          score: req.score,
-          level: req.level,
+          name: req.name ?? '',
+          cloud: req.cloud ?? '',
+          zone: req.zone ?? '',
+          host: req.host ?? '',
+          score: submission.score,
+          level: submission.level,
           referer: 'grpc',
           user_agent: 'grpc',
           hostname: 'grpc',
@@ -35,13 +49,14 @@ export function createScoreService(db) {
         });
         callback(null, {
           rs: 'success',
-          name: req.name,
-          zone: req.zone,
-          score: req.score,
-          level: req.level,
+          name: req.name ?? '',
+          zone: req.zone ?? '',
+          score: submission.score,
+          level: submission.level,
         });
       } catch (err) {
-        callback(err);
+        logger?.error?.({ err }, 'gRPC score submission failed');
+        callback(statusError(grpc.status.INTERNAL, 'score submission failed'));
       }
     },
 
@@ -51,7 +66,8 @@ export function createScoreService(db) {
         const scores = await db.listTopScores(limit);
         callback(null, { scores });
       } catch (err) {
-        callback(err);
+        logger?.error?.({ err }, 'gRPC score listing failed');
+        callback(statusError(grpc.status.INTERNAL, 'score listing failed'));
       }
     },
   };
@@ -59,12 +75,12 @@ export function createScoreService(db) {
 
 export async function startGrpcScoreServer({ db, host = '0.0.0.0', port = 9090, logger }) {
   const server = new grpc.Server();
-  server.addService(pacmanProto.ScoreService.service, createScoreService(db));
+  server.addService(pacmanProto.ScoreService.service, createScoreService(db, { logger }));
   const bindAddress = `${host}:${port}`;
   const boundPort = await new Promise((resolve, reject) => {
     server.bindAsync(bindAddress, grpc.ServerCredentials.createInsecure(), (err, allocatedPort) => {
       if (err) return reject(err);
-      logger?.info({ host, port }, 'pacman grpc score service listening');
+      logger?.info?.({ host, port }, 'pacman grpc score service listening');
       resolve(allocatedPort);
     });
   });

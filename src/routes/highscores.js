@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { config } from '../config/index.js';
 import { passThroughHeaders, requestJson } from '../services/http-client.js';
 import { incCounter } from '../metrics.js';
-import { validateScore } from './score-validation.js';
+import { parseScoreSubmission } from './score-validation.js';
 import { getListOptions, paginate } from './list-options.js';
 
 function upstreamPath(path, req) {
@@ -42,10 +42,9 @@ export function highscoresRouter() {
         return res.status(upstream.status).json(upstream.payload);
       }
 
-      const userScore = Number.parseInt(req.body.score, 10);
-      const userLevel = Number.parseInt(req.body.level, 10);
-      const validationError = validateScore(userScore, userLevel, config.MAX_LEVEL);
-      if (validationError) return res.status(400).json({ error: validationError });
+      const submission = parseScoreSubmission(req.body?.score, req.body?.level, config.MAX_LEVEL);
+      if (submission.error) return res.status(400).json({ error: submission.error });
+      const { score: userScore, level: userLevel } = submission;
 
       incCounter('pacman_db_operations_total', { op: 'insertScore', source: 'public' });
       incCounter('pacman_score_submissions_total', { source: 'public' });
@@ -56,7 +55,7 @@ export function highscoresRouter() {
         zone: req.body.zone,
         host: req.body.host,
         score: userScore,
-        level: Number.isFinite(userLevel) ? userLevel : null,
+        level: userLevel,
         referer: req.headers.referer,
         user_agent: req.headers['user-agent'],
         hostname: req.hostname,

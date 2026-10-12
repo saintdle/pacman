@@ -46,6 +46,8 @@ spec:
               value: "http://pacman-score.pacman-demo.svc:8080"
             - name: USER_SERVICE_URL
               value: "http://pacman-user.pacman-demo.svc:8080"
+            - name: READINESS_CHECK_UPSTREAMS
+              value: "true"
           readinessProbe:
             httpGet:
               path: /readyz

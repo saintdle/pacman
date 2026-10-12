@@ -1,9 +1,41 @@
 import 'dotenv/config';
+import { isIP } from 'node:net';
 import { z } from 'zod';
 
 const boolish = z
   .union([z.string(), z.boolean()])
   .transform((v) => (typeof v === 'boolean' ? v : ['1', 'true', 'yes', 'on'].includes(v.toLowerCase())));
+
+function validProxySubnet(value) {
+  if (['loopback', 'linklocal', 'uniquelocal'].includes(value.toLowerCase())) return true;
+
+  const [address, prefix, ...extra] = value.split('/');
+  const addressFamily = isIP(address);
+  if (addressFamily === 0 || extra.length > 0) return false;
+  if (prefix === undefined) return true;
+  if (!/^\d+$/.test(prefix)) return false;
+
+  const bits = Number(prefix);
+  return bits <= (addressFamily === 4 ? 32 : 128);
+}
+
+const trustProxy = z.string().default('false').transform((value, ctx) => {
+  const normalized = value.trim();
+  if (normalized.toLowerCase() === 'false') return false;
+  if (/^\d+$/.test(normalized)) {
+    const hops = Number(normalized);
+    if (Number.isSafeInteger(hops)) return hops;
+  } else {
+    const subnets = normalized.split(',').map((subnet) => subnet.trim());
+    if (subnets.length > 0 && subnets.every((subnet) => subnet && validProxySubnet(subnet))) return subnets;
+  }
+
+  ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    message: 'TRUST_PROXY must be false, an integer hop count, or a comma-separated proxy address list',
+  });
+  return z.NEVER;
+});
 
 const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -28,6 +60,8 @@ const schema = z.object({
   USER_SERVICE_URL: z.string().url().optional(),
   CONFIG_SERVICE_URL: z.string().url().optional(),
   TOPOLOGY_SERVICE_URL: z.string().url().optional(),
+  TRUST_PROXY: trustProxy,
+  READINESS_CHECK_UPSTREAMS: boolish.default(false),
 
   // Lab-only demo controls. Fault/incident actions require both
   // DEMO_SECURITY_MODE=true and the configured token header.
