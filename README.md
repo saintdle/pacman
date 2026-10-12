@@ -2,10 +2,9 @@
 
 A Node.js / HTML5 canvas implementation of Pac-Man, originally by
 [platzh1rsch](https://github.com/platzhersh/pacman-canvas) and modified by
-[Ivan Font](https://github.com/font). This fork modernizes the server to Node
-22 + Express 5, adds a pluggable database layer (in-memory, MongoDB, or
-PostgreSQL), and ships unit tests, integration tests, and a Docker Compose
-stack for local development.
+[Ivan Font](https://github.com/font). This fork runs on Node.js 22 and Express
+5. It supports in-memory, MongoDB, and PostgreSQL databases, with unit and
+integration tests and a Docker Compose stack for local development.
 
 > **Migrating from the previous version?** See [`MIGRATION.md`](MIGRATION.md)
 > for the full list of changes (breaking and otherwise).
@@ -40,15 +39,16 @@ Each release publishes one `linux/amd64` and `linux/arm64` manifest list under
 the version tag and moves `latest` to that same manifest list. The image is
 stamped with the release version, source commit, and build timestamp. Releases
 also publish SBOM and provenance attestations and run an advisory Trivy scan
-for high and critical unfixed vulnerabilities. When findings are present, the
-workflow opens a GitHub issue containing the affected packages, versions,
-severity, and advisory links.
+for high and critical vulnerabilities with available fixes. When findings are
+present, the workflow opens a GitHub issue with affected packages, versions,
+severities, and advisory links.
 
-Pull requests build the image locally and run the same Trivy policy before
-merge. Fixable HIGH or CRITICAL findings fail the `Scan pull request image`
-check, and same-repository pull requests also publish the SARIF results for
-review in GitHub code scanning. The image is not pushed to Docker Hub by this
-check.
+Pull requests build the image locally and run the same Trivy scan before
+merge. The scan reports HIGH and CRITICAL findings with available fixes. Its
+step continues when it finds vulnerabilities, so findings alone do not fail
+the job. Same-repository pull requests also upload SARIF results for
+review in GitHub code scanning. This check does not push the image to Docker
+Hub.
 
 ## Running with a real database
 
@@ -64,8 +64,8 @@ DB_TYPE=postgres docker compose --profile postgres up --build
 
 The app is exposed on <http://localhost:8080>.
 
-To run the app process locally against a database container, point env vars at
-it and start the app outside Docker:
+To run the app outside Docker against a database container, set connection
+variables and start it locally:
 
 ```bash
 export DB_TYPE=postgres POSTGRES_HOST=localhost
@@ -89,12 +89,12 @@ See [`.env.example`](.env.example) for the full set of variables.
 | POST   | `/config`            | Validate/authorise a client config override                   |
 | GET    | `/highscores/list`   | High scores; accepts `page`, `pageSize`, and `includeSimulated` |
 | POST   | `/highscores`        | Submit a high score (validated, see below)                    |
-| GET    | `/user/id`           | Create a new user id (UUID v4); accepts `name`                 |
+| GET    | `/user/id`           | Create ID (UUID on memory/Postgres; Mongo ObjectId); accepts `name` |
 | POST   | `/user/stats`        | Update live stats for a user id                               |
 | GET    | `/user/stats`        | Active live stats; accepts `page`, `pageSize`, and `includeSimulated` |
 | GET    | `/location/metadata` | Detect cloud / zone / host                                    |
 
-#### Internal (policy-friendly) endpoints
+### Internal (policy-friendly) endpoints
 
 These mirror the public API with distinct path prefixes for Cilium L7
 network policy targeting:
@@ -116,22 +116,28 @@ falls through to `{cloud: "unknown", zone: "unknown"}`.
 
 ### `POST /highscores` validation
 
-The server rejects implausible submissions before they reach the database.
-The form fields are `name`, `cloud`, `zone`, `host`, `score`, `level`
-(`application/x-www-form-urlencoded`). Validation rules:
+The HTTP route accepts JSON and form-encoded bodies. Submit `name`, `cloud`,
+`zone`, `host`, `score`, and `level`. The validation rules below apply to
+`POST /highscores` and the internal HTTP score-write route:
 
-| Rule                                              | Response                                          |
-|---------------------------------------------------|---------------------------------------------------|
-| `score` missing or not a number                   | `400 {"error":"score must be a number"}`          |
-| `level` outside `[1, MAX_LEVEL]`                  | `400 {"error":"invalid level"}`                   |
-| `score / level > 2840` (max attainable per level) | `400 {"error":"score is implausible for level"}`  |
-| Otherwise                                         | `200 {"rs":"success", ...}`                       |
+| Rule                                                     | Response                                                 |
+|----------------------------------------------------------|----------------------------------------------------------|
+| `score` missing or not a number                          | `400 {"error":"score must be a number"}`               |
+| Parsed finite `level` outside `[1, MAX_LEVEL]`           | `400 {"error":"invalid level"}`                        |
+| Finite `level` and `score / level > 2840`                | `400 {"error":"score is implausible for level"}`       |
+| `level` missing or nonnumeric                            | Accepted; level checks are skipped and stored level is null |
+| Otherwise                                                | `200 {"rs":"success", ...}`                            |
 
-The cap `2840 = 104 * 10 + 4 * 50 + 4 * 4 * 100` is the maximum points one
-level can yield (104 pills + 4 power pills + four ghosts eaten four times
-during beast mode). It is enforced **both** client-side (in
-`public/pacman-canvas.js` `Game.validateScoreWithLevel()`) and server-side
-so a tampered browser cannot poison the leaderboard.
+`MAX_LEVEL` defaults to `10`; set it to a positive integer for another cap or
+to `unlimited` for no upper bound. The per-level score cap is
+`2840 = 104 * 10 + 4 * 50 + 4 * 4 * 100`: 104 pills, four power pills, and four
+ghosts eaten four times during beast mode.
+
+The browser checks this cap before showing the high-score form. The HTTP routes
+also check it when `level` parses to a finite number. Missing or nonnumeric
+levels bypass those server checks and are stored as null. The gRPC `SubmitScore`
+method stores submitted scores without equivalent validation. Treat the cap as
+a plausibility check; it does not prove that a score is authentic.
 
 Examples:
 
@@ -155,19 +161,19 @@ curl -i -X POST localhost:8080/highscores \
 # {"name":"OK","zone":"...","score":2840,"level":1,"rs":"success"}
 ```
 
-This is intentionally a small, predictable signature so it can be used as
-an example of layered input validation in Kubernetes demos. Pair it with,
-for example, a Cilium L7 `CiliumNetworkPolicy` that allows `POST
-/highscores` only from the game pods, a Tetragon `TracingPolicy` watching
-for unexpected exec/file activity in the app container, or an OPA/Kyverno
-admission policy on the Deployment. The 400 path is hot enough to be
-visible in Hubble flows and pod logs without generating a real attack.
+Use the level-1 request to show HTTP validation in Kubernetes. In the Cilium
+example, Hubble can show its `400` response. Related controls include:
+
+- A Cilium L7 `CiliumNetworkPolicy` that restricts `POST /highscores` to game pods.
+- A Tetragon `TracingPolicy` that watches process or file activity.
+- An OPA/Kyverno admission policy for the Deployment.
 
 ### Configurable max level
 
-The maximum level is configurable via the `MAX_LEVEL` environment variable
-(positive integer, or the string `unlimited`, default `10`). It is enforced
-on `POST /highscores` and surfaced to the client via `GET /config`:
+The maximum level comes from the `MAX_LEVEL` environment variable. It defaults
+to `10`; set it to a positive integer for another cap or to `unlimited` for no
+upper bound. The server enforces this setting on `POST /highscores` and shares
+it with the client through `GET /config`:
 
 ```bash
 MAX_LEVEL=20 npm run dev          # cap at level 20
@@ -195,19 +201,19 @@ ALLOW_CLIENT_CONFIG_OVERRIDE=false MAX_LEVEL=10 npm run dev
 
 When locked:
 
-- `GET /config` returns `{"maxLevel":10,"allowClientOverride":false}`.
+- `GET /config` includes `{"maxLevel":10,"allowClientOverride":false}`.
 - `POST /config` returns `403 {"error":"client gameplay config overrides are disabled on this server"}`.
 - The Settings page shows a notice (*"This server does not allow client config changes."*) and the maximum-level controls are disabled.
-- Any stale override previously saved in `localStorage` is ignored at runtime, so the client always matches the server cap.
+- The Settings page ignores any saved local override while locked, so the client uses the server cap.
 
-This is useful for hosted demos and Instruqt-style labs where you want
-all players to see the same level cap, and it also makes a clean
-illustration of a server-authoritative config flag pattern.
+Use this setting in hosted demos or labs that require every player to share the
+server's level cap.
 
 ### eBee mode
 
-eBee mode is a visual theme that keeps the maze, collisions, scoring, and
-server validation unchanged. When enabled:
+eBee mode changes the visuals and the client-side ghost contact range. It keeps
+the maze layout, scoring, and server validation unchanged. Ghost contact uses
+a 15-pixel range instead of Pac-Man mode's 10-pixel range. The theme also:
 
 - Pac-Man is drawn as an 8-bit eBee inspired by the Isovalent eBeeDex.
 - eBee's wings flap in place of Pac-Man's mouth animation.
@@ -232,7 +238,7 @@ set eBee mode at the server level, disable the client override:
 EBEE_MODE=true ALLOW_CLIENT_EBEE_MODE_OVERRIDE=false npm run dev
 ```
 
-When locked, `GET /config` advertises
+When locked, `GET /config` includes
 `{"ebeeMode":true,"allowEbeeModeOverride":false}`, `POST /config` returns
 `403` for attempted eBee-mode changes, and the Settings checkbox is shown
 read-only.
@@ -306,6 +312,9 @@ DEMO_TOKEN_HEADER=x-demo-token
 DEMO_TOKEN=pacman-demo
 ```
 
+The example token is public. If demo mode is enabled on an exposed service, use
+a per-deployment token from a Kubernetes Secret.
+
 With the correct token header, demos can inject controlled HTTP delay/status
 responses using `x-demo-fault-delay-ms` and `x-demo-fault-status`, record a
 structured incident with `POST /demo/incidents`, or trigger safe Tetragon probes
@@ -373,7 +382,7 @@ src/
     migrate.js        Forward-only migration runner (postgres)
     migrations/postgres/0001_init.sql
   routes/
-    health.js         /healthz, /readyz (with upstream dep probes)
+    health.js         /healthz, /readyz, /readyz/details (upstream probes)
     highscores.js     /highscores
     user.js           /user/id, /user/stats
     location.js       /location/metadata

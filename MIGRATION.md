@@ -1,9 +1,8 @@
-# Migration notes (modernization pass)
+# Migration notes
 
-This release modernizes the Node.js / Express / MongoDB stack and adds first-class
-PostgreSQL support behind a pluggable adapter. Most of the public HTTP surface
-is unchanged so existing K8s manifests and clients keep working; the small
-breaking changes are listed below.
+This migration moves the server to Node.js 22 and Express 5 and adds PostgreSQL
+support through a pluggable database adapter. Most public HTTP routes keep the
+same methods and response shapes; the breaking changes are listed below.
 
 ## Runtime / dependencies
 
@@ -41,28 +40,28 @@ Existing `MONGO_*` variables are preserved. See `.env.example` for the full list
 
 The route table, methods, and core response shapes are unchanged:
 
-- `GET /highscores/list` — list of `{name, cloud, zone, host, score}`
-- `POST /highscores` — `{name, zone, score, level, rs}`
-- `GET /user/id` — bare string id (JSON-encoded)
-- `POST /user/stats` — `{rs: 'success'|'error'}`
-- `GET /user/stats` — list of `{cloud, zone, host, score, level, lives, et, txncount}`
-- `GET /location/metadata` — `{cloud, zone, host}`
+- `GET /highscores/list`: list of `{name, cloud, zone, host, score}`
+- `POST /highscores`: `{name, zone, score, level, rs}`
+- `GET /user/id`: bare string id (JSON-encoded)
+- `POST /user/stats`: `{rs: 'success'|'error'}`
+- `GET /user/stats`: list of `{cloud, zone, host, score, level, lives, et, txncount}`
+- `GET /location/metadata`: `{cloud, zone, host}`
 
 New endpoints for K8s probes:
 
 - `GET /healthz` → `200 {status: 'ok'}` (liveness, no DB)
 - `GET /readyz` → `200` when the DB adapter `healthcheck()` passes, `503` otherwise
+- `GET /readyz/details` → readiness with database and configured upstream details
 
 Behavioural changes worth noting:
 
-- **`GET /user/id`** now returns a UUID v4 string instead of a Mongo `ObjectId`
-  string. Same JSON shape (a bare string), but if clients parse it as a Mongo
-  ObjectId they will need to stop doing that. `POST /user/stats` accepts both
-  legacy ObjectId hex and the new UUID for the `userId` field when running
-  against the Mongo adapter.
+- **`GET /user/id`** returns the ID format used by the configured adapter:
+  Mongo returns an `ObjectId` string; memory and PostgreSQL return UUID v4
+  strings. The JSON shape remains a bare string. `POST /user/stats` accepts
+  both legacy ObjectId hex and UUID strings with the Mongo adapter.
 - **Request validation**: `POST /highscores` returns `400` if `score` is not a
-  number; `POST /user/stats` returns `400` if `userId` is missing. Previously
-  both silently inserted partial documents.
+  number; `POST /user/stats` returns `400` if `userId` is missing. Older
+  versions could silently insert partial documents.
 - **Error responses** use the Pug error template (was Jade).
 
 ## Database storage
@@ -88,8 +87,8 @@ Migrations are tracked in `schema_migrations`.
 
 ## Frontend
 
-The game (`public/pacman-canvas.js`, jQuery + Hammer) is **not** rewritten in
-this pass — risk/reward did not justify it. Specific changes:
+The game remains in `public/pacman-canvas.js` and uses jQuery and Hammer. Changes
+include:
 
 - **Wall/teleport bug fixes** in `public/pacman-canvas.js`:
   1. Operator-precedence bug in the wall-collision unstick code:
@@ -106,22 +105,19 @@ this pass — risk/reward did not justify it. Specific changes:
   - **PR #57** (Oct 2023, post-1.0.6): use `this.speed` instead of the
     hardcoded number `5` in the pill-collision and wall-unstick blocks so
     the game still works if Pac-Man's speed is ever changed.
-  - **v1.0.2 + v1.0.5**: cap the game at `FINAL_LEVEL = 10` with a real
-    end-game transition (`Game.endGame()`, `Game.showHighscoreForm()`) and
-    a client-side `Game.validateScoreWithLevel()` anti-cheat check
-    (max points per level = `104*10 + 4*50 + 4*4*100 = 2840`). The
-    `pacman.dieFinal` lose-path and the `nextLevel` win-path both route
-    through these now.
-  - Server-side enforcement of the same rule in
-    `src/routes/highscores.js`: `POST /highscores` returns `400` if
-    `level` is outside `[1, 10]` or `score / level > 2840`.
-  - Skipped: upstream dependabot bumps (different stack), PHP/SQLite
-    SQL-injection fix (N/A), webpack/build-tooling commits (deferred).
+  - **v1.0.2 + v1.0.5**: add an end-game transition (`Game.endGame()`,
+    `Game.showHighscoreForm()`) and a client-side `Game.validateScoreWithLevel()`
+    plausibility check. The client uses `FINAL_LEVEL = 10` until it loads the
+    server setting. The check caps scores at
+    `104*10 + 4*50 + 4*4*100 = 2840` points per level. Both the
+    `pacman.dieFinal` lose-path and the `nextLevel` win-path use this transition.
+  - HTTP score routes apply the same `2840` cap when `level` parses to a finite
+    number. The server's `MAX_LEVEL` defaults to `10`, accepts another positive
+    integer, or can be set to `unlimited`. Missing or nonnumeric levels bypass
+    these checks and are stored as null. The gRPC `SubmitScore` method does not
+    apply equivalent validation.
 - Deprecated AppCache (`cache.manifest`) reference removed from
   `public/index.html`; the file itself is deleted.
-
-Deferred to a follow-up: splitting `pacman-canvas.js` into ES modules, an
-esbuild bundle pipeline, and removing the jQuery dependency.
 
 ## File layout
 
@@ -146,8 +142,8 @@ cp .env.example .env          # optional
 npm run dev                   # in-memory DB, no extra services
 
 # or with a real database
-docker compose --profile postgres up --build
-docker compose --profile mongo up --build
+DB_TYPE=postgres docker compose --profile postgres up --build
+DB_TYPE=mongo docker compose --profile mongo up --build
 ```
 
 Run tests:
@@ -157,10 +153,7 @@ npm test                                  # unit + route tests (memory adapter)
 RUN_ADAPTER_TESTS=1 npm run test:adapters # spins up mongo + postgres via testcontainers
 ```
 
-## Deferred (next pass)
+## Deferred work
 
-- Extend `pacman-for-k8s` further (Helm chart, Postgres `StatefulSet`, a
-  `Job` for `db:migrate`). The lightweight `k8s/examples/` in this repo and
-  the existing `pacman-for-k8s` Cilium demos already cover the common cases.
-- Modular frontend (esbuild bundle) and jQuery removal.
+- Modularize the frontend with esbuild and remove jQuery.
 - TypeScript migration.
