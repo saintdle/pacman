@@ -1,8 +1,10 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import http from 'node:http';
 import request from 'supertest';
 import { MemoryAdapter } from '../src/db/memory.js';
 import { createApp } from '../src/app.js';
+import { config } from '../src/config/index.js';
 
 let app;
 let db;
@@ -41,6 +43,119 @@ test('GET /readyz/details returns db and gameplay config details', async () => {
   assert.deepEqual(res.body.upstreams, {});
   assert.equal(typeof res.body.config.allowClientOverride, 'boolean');
   assert.equal(typeof res.body.config.allowEbeeModeOverride, 'boolean');
+});
+
+test('GET /readyz ignores configured upstreams by default while details still probes readiness', async () => {
+  const previous = {
+    APP_ROLE: config.APP_ROLE,
+    READINESS_CHECK_UPSTREAMS: config.READINESS_CHECK_UPSTREAMS,
+    SCORE_SERVICE_URL: config.SCORE_SERVICE_URL,
+  };
+  const paths = [];
+  const upstream = http.createServer((req, res) => {
+    paths.push(req.url);
+    res.statusCode = 503;
+    res.end('{"status":"not-ready"}');
+  });
+
+  try {
+    await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+    config.APP_ROLE = 'web';
+    config.READINESS_CHECK_UPSTREAMS = false;
+    config.SCORE_SERVICE_URL = `http://127.0.0.1:${upstream.address().port}`;
+
+    const ready = await request(app).get('/readyz');
+    assert.equal(ready.status, 200);
+    assert.deepEqual(paths, []);
+
+    const details = await request(app).get('/readyz/details');
+    assert.equal(details.status, 503);
+    assert.equal(details.body.upstreams.score.healthy, false);
+    assert.deepEqual(paths, ['/readyz']);
+  } finally {
+    upstream.closeAllConnections();
+    await new Promise((resolve) => upstream.close(resolve));
+    Object.assign(config, previous);
+  }
+});
+
+test('GET /readyz checks configured upstream readiness when enabled', async () => {
+  const previous = {
+    APP_ROLE: config.APP_ROLE,
+    READINESS_CHECK_UPSTREAMS: config.READINESS_CHECK_UPSTREAMS,
+    SCORE_SERVICE_URL: config.SCORE_SERVICE_URL,
+  };
+  const paths = [];
+  const upstream = http.createServer((req, res) => {
+    paths.push(req.url);
+    res.statusCode = 503;
+    res.end('{"status":"not-ready"}');
+  });
+
+  try {
+    await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+    config.APP_ROLE = 'web';
+    config.READINESS_CHECK_UPSTREAMS = true;
+    config.SCORE_SERVICE_URL = `http://127.0.0.1:${upstream.address().port}`;
+
+    const res = await request(app).get('/readyz');
+    assert.equal(res.status, 503);
+    assert.equal(res.body.status, 'not-ready');
+    assert.deepEqual(paths, ['/readyz']);
+  } finally {
+    upstream.closeAllConnections();
+    await new Promise((resolve) => upstream.close(resolve));
+    Object.assign(config, previous);
+  }
+});
+
+test('GET /readyz returns not-ready for unreachable configured upstreams when enabled', async () => {
+  const previous = {
+    APP_ROLE: config.APP_ROLE,
+    READINESS_CHECK_UPSTREAMS: config.READINESS_CHECK_UPSTREAMS,
+    SCORE_SERVICE_URL: config.SCORE_SERVICE_URL,
+  };
+
+  try {
+    config.APP_ROLE = 'web';
+    config.READINESS_CHECK_UPSTREAMS = true;
+    config.SCORE_SERVICE_URL = 'http://127.0.0.1:1';
+
+    const res = await request(app).get('/readyz');
+    assert.equal(res.status, 503);
+    assert.equal(res.body.status, 'not-ready');
+  } finally {
+    Object.assign(config, previous);
+  }
+});
+
+test('GET /readyz stops probing when an upstream path returns to the same app', async () => {
+  const previous = {
+    APP_ROLE: config.APP_ROLE,
+    READINESS_CHECK_UPSTREAMS: config.READINESS_CHECK_UPSTREAMS,
+    SCORE_SERVICE_URL: config.SCORE_SERVICE_URL,
+  };
+  const server = http.createServer(app);
+  let requests = 0;
+  server.on('request', () => {
+    requests += 1;
+  });
+
+  try {
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const selfUrl = `http://127.0.0.1:${server.address().port}`;
+    config.APP_ROLE = 'web';
+    config.READINESS_CHECK_UPSTREAMS = true;
+    config.SCORE_SERVICE_URL = selfUrl;
+
+    const res = await fetch(`${selfUrl}/readyz`);
+    assert.equal(res.status, 200);
+    assert.equal(requests, 2);
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+    Object.assign(config, previous);
+  }
 });
 
 test('GET /metrics returns Prometheus text with bounded route labels', async () => {
@@ -191,6 +306,97 @@ test('POST /highscores accepts a plausible score', async () => {
     .send({ name: 'OK', score: '2840', level: '1' });
   assert.equal(res.status, 200);
   assert.equal(res.body.rs, 'success');
+});
+
+test('public and internal score submissions reject invalid values before database writes', async () => {
+  const invalidSubmissions = [
+    { name: 'MISSING-SCORE', level: 1 },
+    { name: 'MISSING-LEVEL', score: 100 },
+    { name: 'NULL-SCORE', score: null, level: 1 },
+    { name: 'NAN-SCORE', score: 'NaN', level: 1 },
+    { name: 'TEXT-SCORE', score: 'abc', level: 1 },
+    { name: 'PARTIAL-SCORE', score: '100tail', level: 1 },
+    { name: 'FRACTIONAL-SCORE', score: 1.5, level: 1 },
+    { name: 'NEGATIVE-SCORE', score: -1, level: 1 },
+    { name: 'UNSAFE-SCORE', score: 9007199254740992, level: 1 },
+    { name: 'TEXT-LEVEL', score: 100, level: 'abc' },
+    { name: 'PARTIAL-LEVEL', score: 100, level: '1tail' },
+    { name: 'FRACTIONAL-LEVEL', score: 100, level: 1.5 },
+    { name: 'ZERO-LEVEL', score: 100, level: 0 },
+    { name: 'NEGATIVE-LEVEL', score: 100, level: -1 },
+    { name: 'UNSAFE-LEVEL', score: 0, level: 9007199254740992 },
+    { name: 'OVER-CAP-LEVEL', score: 0, level: 11 },
+    { name: 'IMPLAUSIBLE', score: 999999, level: 1 },
+  ];
+
+  for (const path of ['/highscores', '/internal/score/write']) {
+    for (const submission of invalidSubmissions) {
+      const before = db.highscores.length;
+      const res = await request(app).post(path).send(submission);
+      assert.equal(res.status, 400, `${path} should reject ${submission.name}`);
+      assert.equal(db.highscores.length, before, `${path} should not store ${submission.name}`);
+    }
+
+    const before = db.highscores.length;
+    const malformedBody = await request(app).post(path).type('json').send(null);
+    assert.equal(malformedBody.status, 400, `${path} should reject a null body`);
+    assert.equal(db.highscores.length, before, `${path} should not store a null body`);
+  }
+});
+
+test('public and internal score submissions accept JSON numbers and score zero', async () => {
+  for (const path of ['/highscores', '/internal/score/write']) {
+    const res = await request(app).post(path).send({ name: 'ZERO', score: 0, level: 1 });
+    assert.equal(res.status, 200);
+    assert.equal(res.body.rs, 'success');
+    assert.equal(res.body.score, 0);
+    assert.equal(res.body.level, 1);
+  }
+});
+
+test('score submissions honor the unlimited MAX_LEVEL setting', async () => {
+  const previous = config.MAX_LEVEL;
+
+  try {
+    config.MAX_LEVEL = 'unlimited';
+    for (const path of ['/highscores', '/internal/score/write']) {
+      const res = await request(app).post(path).send({ name: 'UNLIMITED', score: 0, level: 11 });
+      assert.equal(res.status, 200);
+      assert.equal(res.body.level, 11);
+    }
+  } finally {
+    config.MAX_LEVEL = previous;
+  }
+});
+
+test('Express trusts no forwarded client address by default and supports explicit loopback trust', async () => {
+  const previous = config.TRUST_PROXY;
+  const proxyIp = '198.51.100.42';
+  const probeDb = new MemoryAdapter();
+  await probeDb.connect();
+
+  try {
+    config.TRUST_PROXY = false;
+    const untrustedApp = createApp({ db: probeDb });
+    const untrusted = await request(untrustedApp)
+      .post('/highscores')
+      .set('x-forwarded-for', proxyIp)
+      .send({ name: 'UNTRUSTED', score: 1, level: 1 });
+    assert.equal(untrusted.status, 200);
+    assert.notEqual(probeDb.highscores.at(-1).ip_addr, proxyIp);
+
+    config.TRUST_PROXY = ['loopback'];
+    const trustedApp = createApp({ db: probeDb });
+    const trusted = await request(trustedApp)
+      .post('/highscores')
+      .set('x-forwarded-for', proxyIp)
+      .send({ name: 'TRUSTED', score: 1, level: 1 });
+    assert.equal(trusted.status, 200);
+    assert.equal(probeDb.highscores.at(-1).ip_addr, proxyIp);
+  } finally {
+    config.TRUST_PROXY = previous;
+    await probeDb.disconnect();
+  }
 });
 
 test('internal score endpoints read, validate, and write scores', async () => {

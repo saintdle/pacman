@@ -40,6 +40,18 @@ process.stdout.write(JSON.stringify({
 }));
 `;
 
+const runtimeConfigScript = `
+import { config } from './src/config/index.js';
+process.stdout.write(JSON.stringify({ trustProxy: config.TRUST_PROXY, checkUpstreams: config.READINESS_CHECK_UPSTREAMS }));
+`;
+
+const appTrustProxyScript = `
+import { config } from './src/config/index.js';
+import { createApp } from './src/app.js';
+createApp({ db: {} });
+process.stdout.write(JSON.stringify({ trustProxy: config.TRUST_PROXY }));
+`;
+
 test('GET /config advertises allowClientOverride=false when locked', () => {
   const out = runWithEnv({ ALLOW_CLIENT_CONFIG_OVERRIDE: 'false' }, childScript);
   assert.equal(out.getStatus, 200);
@@ -63,4 +75,37 @@ test('POST /config returns 403 when eBee mode overrides are disabled', () => {
   const out = runWithEnv({ EBEE_MODE: 'true', ALLOW_CLIENT_EBEE_MODE_OVERRIDE: 'false', POST_MODE: 'ebee' }, childScript);
   assert.equal(out.postStatus, 403);
   assert.match(out.postBody.error, /disabled/);
+});
+
+test('proxy trust and upstream readiness have safe false defaults', () => {
+  const out = runWithEnv({}, runtimeConfigScript);
+  assert.equal(out.trustProxy, false);
+  assert.equal(out.checkUpstreams, false);
+});
+
+test('TRUST_PROXY accepts an explicit hop count or subnet list', () => {
+  const hops = runWithEnv({ TRUST_PROXY: '1' }, runtimeConfigScript);
+  assert.equal(hops.trustProxy, 1);
+
+  const subnets = runWithEnv({ TRUST_PROXY: 'loopback,10.0.0.0/8' }, runtimeConfigScript);
+  assert.deepEqual(subnets.trustProxy, ['loopback', '10.0.0.0/8']);
+});
+
+test('TRUST_PROXY rejects invalid and blanket true configuration', () => {
+  for (const value of ['true', 'yes', 'invalid', '10.0.0.0/not-a-mask']) {
+    const res = spawnSync(process.execPath, ['--input-type=module', '-e', runtimeConfigScript], {
+      env: { ...process.env, TRUST_PROXY: value },
+      encoding: 'utf8',
+    });
+    assert.notEqual(res.status, 0, `TRUST_PROXY=${value} should fail configuration validation`);
+    assert.match(res.stderr, /Invalid environment configuration/);
+  }
+});
+
+test('TRUST_PROXY normalizes mixed-case Express range aliases before app initialization', () => {
+  const upper = runWithEnv({ TRUST_PROXY: 'LOOPBACK' }, appTrustProxyScript);
+  assert.deepEqual(upper.trustProxy, ['loopback']);
+
+  const mixed = runWithEnv({ TRUST_PROXY: 'LoopBack,UniQueLocal,10.0.0.0/8' }, appTrustProxyScript);
+  assert.deepEqual(mixed.trustProxy, ['loopback', 'uniquelocal', '10.0.0.0/8']);
 });

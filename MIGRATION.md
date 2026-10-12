@@ -50,8 +50,20 @@ The route table, methods, and core response shapes are unchanged:
 New endpoints for K8s probes:
 
 - `GET /healthz` → `200 {status: 'ok'}` (liveness, no DB)
-- `GET /readyz` → `200` when the DB adapter `healthcheck()` passes, `503` otherwise
-- `GET /readyz/details` → readiness with database and configured upstream details
+- `GET /readyz` → `200` when the DB adapter `healthcheck()` passes; on the web
+  role it can also check configured upstreams when
+  `READINESS_CHECK_UPSTREAMS=true` (default `false`)
+- `GET /readyz/details` → readiness with database and configured upstream details;
+  web-role upstream probes always run here
+
+Upstream readiness probes run in parallel with a 750 ms timeout and a one-hop
+marker to avoid probe cycles. The multi-role Kubernetes web example enables
+them; enabling the setting can make the web pod unready when a backend is
+unavailable. `/healthz` remains a liveness check without a database probe.
+`TRUST_PROXY` defaults to `false`; configure a non-negative hop count or a
+comma-separated proxy IP, CIDR, or named range (`loopback`, `linklocal`,
+`uniquelocal`) to match the actual ingress. Forwarded headers from direct
+external clients are not trusted by default.
 
 Behavioural changes worth noting:
 
@@ -59,9 +71,17 @@ Behavioural changes worth noting:
   Mongo returns an `ObjectId` string; memory and PostgreSQL return UUID v4
   strings. The JSON shape remains a bare string. `POST /user/stats` accepts
   both legacy ObjectId hex and UUID strings with the Mongo adapter.
-- **Request validation**: `POST /highscores` returns `400` if `score` is not a
-  number; `POST /user/stats` returns `400` if `userId` is missing. Older
-  versions could silently insert partial documents.
+- **Request validation**: HTTP score routes reject missing, nonnumeric,
+  fractional, negative, or unsafe scores, and reject missing, nonnumeric,
+  fractional, unsafe, or out-of-range levels. Invalid score and level values
+  return `400` with `score must be a non-negative safe integer` or
+  `invalid level`. gRPC `SubmitScore` applies the same checks to decoded values
+  and returns `INVALID_ARGUMENT`; internal failures return a sanitized
+  `INTERNAL` error. In the gRPC wire format, an absent score decodes to zero
+  and is accepted with a valid level, while an absent level decodes to zero
+  and is rejected. Fractions and unsafe integers cannot be transmitted as such
+  as `int32` values. `POST /user/stats` also returns `400` if `userId` is
+  missing. Older versions could silently insert partial documents.
 - **Error responses** use the Pug error template (was Jade).
 
 ## Database storage
@@ -111,13 +131,21 @@ include:
     server setting. The check caps scores at
     `104*10 + 4*50 + 4*4*100 = 2840` points per level. Both the
     `pacman.dieFinal` lose-path and the `nextLevel` win-path use this transition.
-  - HTTP score routes apply the same `2840` cap when `level` parses to a finite
-    number. The server's `MAX_LEVEL` defaults to `10`, accepts another positive
-    integer, or can be set to `unlimited`. Missing or nonnumeric levels bypass
-    these checks and are stored as null. The gRPC `SubmitScore` method does not
-    apply equivalent validation.
+  - HTTP score routes and gRPC `SubmitScore` apply the same `2840` plausibility
+    cap and validate score and level values. `MAX_LEVEL` defaults to `10`, can
+    be set to another positive integer, or to `unlimited`. The cap is a
+    plausibility check and does not prove that a score is authentic.
+
 - Deprecated AppCache (`cache.manifest`) reference removed from
   `public/index.html`; the file itself is deleted.
+
+The browser loads the shared movement helper from `public/js/movement.js`
+synchronously; the Node wrapper re-exports that helper. Movement wraps at the
+maze edges, lands on grid-aligned positions, and uses breadth-first maze
+distances for ghost routing while retaining target modes, house behavior,
+scoring, and themes. Regenerate all six normal and eBee instruction screenshots
+from the current maze and sprite rules with
+`node tools/generate-instruction-screenshots.js`.
 
 ## File layout
 

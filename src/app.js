@@ -14,6 +14,7 @@ import { metricsRouter } from './routes/metrics.js';
 import { internalRouter } from './routes/internal.js';
 import { demoFaultMiddleware } from './middleware/demo-fault.js';
 import { metricsMiddleware } from './metrics.js';
+import { config } from './config/index.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..');
@@ -26,7 +27,7 @@ const repoRoot = path.resolve(here, '..');
 export function createApp({ db }) {
   const app = express();
 
-  app.set('trust proxy', true);
+  app.set('trust proxy', config.TRUST_PROXY);
   app.set('views', path.join(repoRoot, 'views'));
   app.set('view engine', 'pug');
 

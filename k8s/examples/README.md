@@ -30,3 +30,9 @@ helm show values saintdle/pacman
 
 The raw manifests remain useful when demonstrating individual Kubernetes,
 Cilium, Prometheus, or Tetragon concepts without installing the full chart.
+
+The multi-role web Deployment enables `READINESS_CHECK_UPSTREAMS`, so its
+`/readyz` probe checks configured backends as well as the local database. This
+can remove the web pod from service while a backend is unavailable. The check
+is off by default elsewhere; `/readyz/details` always reports web-role upstream
+probes, and `/healthz` remains a liveness check without a database probe.
