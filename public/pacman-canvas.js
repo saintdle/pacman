@@ -286,6 +286,17 @@ function geronimo() {
     }
 
     function renderThemeCopy() {
+        var theme = game.ebeeMode ? 'ebee_' : '';
+        var playerName = game.ebeeMode ? 'eBee' : 'Pac-Man';
+        $('#scatter-instructions-image')
+            .attr('src', 'img/instructions/instructions_' + theme + 'scatter.svg')
+            .attr('alt', playerName + ' ghosts in scatter mode');
+        $('#chase-instructions-image')
+            .attr('src', 'img/instructions/instructions_' + theme + 'chase.svg')
+            .attr('alt', playerName + ' ghosts in chase mode');
+        $('#powerpill-instructions-image')
+            .attr('src', 'img/instructions/instructions_' + theme + 'powerpill.svg')
+            .attr('alt', 'Powerpill effect on ' + playerName + ' and the ghosts');
         if (game.ebeeMode) {
             $('#powerpill-instructions').text('In every level there are 4 Cilium power pills, shown with the Cilium logo. If eBee collects one, the flowers turn blue and can be picked for 100 points while the effect lasts. One Cilium power pill results in 50 points.');
             $('#ghost-instructions').text('Picking a blue flower results in 100 points. Its returning eyes travel back to the flower house before it starts chasing eBee again.');
@@ -704,13 +715,10 @@ function geronimo() {
         };
 
         this.getMapContent = function (x, y) {
-            var maxX = game.width / 30 -1;
-            var maxY = game.height / 30 -1;
-            if (x < 0) x = maxX + x;
-            if (x > maxX) x = x-maxX;
-            if (y < 0) y = maxY + y;
-            if (y > maxY) y = y-maxY;
-            return this.map.posY[y].posX[x].type;
+            return PacmanMovement.getMapContent(this.map, x, y, {
+                width: game.width / 30,
+                height: game.height / 30
+            });
         };
 
         this.setMapContent = function (x,y,val) {
@@ -1283,11 +1291,11 @@ function geronimo() {
                 this.posX += this.speed * this.dirX;
                 this.posY += this.speed * this.dirY;
 
-                // Check if out of canvas
-                if (this.posX >= game.width-this.radius) this.posX = this.speed-this.radius;
-                if (this.posX <= 0-this.radius) this.posX = game.width-this.speed-this.radius;
-                if (this.posY >= game.height-this.radius) this.posY = this.speed-this.radius;
-                if (this.posY <= 0-this.radius) this.posY = game.height-this.speed-this.radius;
+                var wrappedPosition = PacmanMovement.wrapPosition(
+                    { x: this.posX, y: this.posY }, game.width, game.height, this.radius
+                );
+                this.posX = wrappedPosition.x;
+                this.posY = wrappedPosition.y;
             }
         }
 
@@ -1314,112 +1322,35 @@ function geronimo() {
 
         /* Pathfinding */
         this.getNextDirection = function() {
-            // get next field
             var pX = this.getGridPosX();
             var pY= this.getGridPosY();
-            game.getMapContent(pX,pY);
-            var u, d, r, l;             // option up, down, right, left
-
-            // get target
-            if (this.dead) {            // go Home
-                var tX = this.startPosX / 30;
-                var tY = this.startPosY / 30;
-                }
-            else if (game.ghostMode == 0) {            // Scatter Mode
-                var tX = this.gridBaseX;
-                var tY = this.gridBaseY;
-            } else if (game.ghostMode == 1) {            // Chase Mode
-
-                switch (this.name) {
-
-                // target: 4 ahead and 4 left of pacman
-                case "pinky":
-                    var pdir = pacman.direction;
-                    var pdirX = pdir.dirX == 0 ? - pdir.dirY : pdir.dirX;
-                    var pdirY = pdir.dirY == 0 ? - pdir.dirX : pdir.dirY;
-
-                    var tX = (pacman.getGridPosX() + pdirX*4) % (game.width / pacman.radius +1);
-                    var tY = (pacman.getGridPosY() + pdirY*4) % (game.height / pacman.radius +1);
-                    break;
-
-                // target: pacman
-                case "blinky":
-                    var tX = pacman.getGridPosX();
-                    var tY = pacman.getGridPosY();
-                    break;
-
-                // target:
-                case "inky":
-                    var tX = pacman.getGridPosX() + 2*pacman.direction.dirX;
-                    var tY = pacman.getGridPosY() + 2*pacman.direction.dirY;
-                    var vX = tX - blinky.getGridPosX();
-                    var vY = tY - blinky.getGridPosY();
-                    tX = Math.abs(blinky.getGridPosX() + vX*2);
-                    tY = Math.abs(blinky.getGridPosY() + vY*2);
-                    break;
-
-                // target: pacman, until pacman is closer than 5 grid fields, then back to scatter
-                case "clyde":
-                    var tX = pacman.getGridPosX();
-                    var tY = pacman.getGridPosY();
-                    var dist = Math.sqrt(Math.pow((pX-tX),2) + Math.pow((pY - tY),2));
-
-                    if (dist < 5) {
-                        tX = this.gridBaseX;
-                        tY = this.gridBaseY;
-                    }
-                    break;
-
-                }
-            }
-
-
-            var oppDir = this.getOppositeDirection();    // ghosts are not allowed to change direction 180°
-
-            var dirs = [{},{},{},{}];
-            dirs[0].field = game.getMapContent(pX,pY-1);
-            dirs[0].dir = up;
-            dirs[0].distance = Math.sqrt(Math.pow((pX-tX),2) + Math.pow((pY -1 - tY),2));
-
-            dirs[1].field = game.getMapContent(pX,pY+1);
-            dirs[1].dir = down;
-            dirs[1].distance = Math.sqrt(Math.pow((pX-tX),2) + Math.pow((pY+1 - tY),2));
-
-            dirs[2].field = game.getMapContent(pX+1,pY);
-            dirs[2].dir = right;
-            dirs[2].distance = Math.sqrt(Math.pow((pX+1-tX),2) + Math.pow((pY - tY),2));
-
-            dirs[3].field = game.getMapContent(pX-1,pY);
-            dirs[3].dir = left;
-            dirs[3].distance = Math.sqrt(Math.pow((pX-1-tX),2) + Math.pow((pY - tY),2));
-
-            // Sort possible directions by distance
-            function compare(a,b) {
-              if (a.distance < b.distance)
-                 return -1;
-              if (a.distance > b.distance)
-                return 1;
-              return 0;
-            }
-            var dirs2 = dirs.sort(compare);
-
-            var r = this.dir;
-            var j;
-
-            if (this.dead) {
-                for (var i = dirs2.length-1; i >= 0; i--) {
-                    if ((dirs2[i].field != "wall") && !(dirs2[i].dir.equals(this.getOppositeDirection()))) {
-                    r = dirs2[i].dir;
-                    }
-                }
-            }
-            else {
-                for (var i = dirs2.length-1; i >= 0; i--) {
-                    if ((dirs2[i].field != "wall") && (dirs2[i].field != "door") && !(dirs2[i].dir.equals(this.getOppositeDirection()))) {
-                        r = dirs2[i].dir;
-                        }
-                }
-            }
+            var target = PacmanMovement.getGhostTarget({
+                ghost: {
+                    name: this.name,
+                    x: pX,
+                    y: pY,
+                    startX: this.startPosX / 30,
+                    startY: this.startPosY / 30,
+                    homeX: this.gridBaseX,
+                    homeY: this.gridBaseY,
+                    dead: this.dead
+                },
+                pacman: {
+                    x: pacman.getGridPosX(),
+                    y: pacman.getGridPosY(),
+                    direction: pacman.direction
+                },
+                blinky: { x: blinky.getGridPosX(), y: blinky.getGridPosY() },
+                ghostMode: game.ghostMode,
+                frightened: this.dazzled
+            });
+            var r = PacmanMovement.chooseGhostDirection(
+                game.map,
+                { x: pX, y: pY },
+                this.direction,
+                target,
+                { allowDoor: this.dead, directions: [up, down, right, left] }
+            );
             this.directionWatcher.set(r);
             return r;
         }
@@ -1492,11 +1423,11 @@ function geronimo() {
                 this.posX += this.speed * this.dirX;
                 this.posY += this.speed * this.dirY;
 
-                // Check if out of canvas
-                if (this.posX >= game.width-this.radius) this.posX = this.speed-this.radius;
-                if (this.posX <= 0-this.radius) this.posX = game.width-this.speed-this.radius;
-                if (this.posY >= game.height-this.radius) this.posY = this.speed-this.radius;
-                if (this.posY <= 0-this.radius) this.posY = game.height-this.speed-this.radius;
+                var wrappedPosition = PacmanMovement.wrapPosition(
+                    { x: this.posX, y: this.posY }, game.width, game.height, this.radius
+                );
+                this.posX = wrappedPosition.x;
+                this.posY = wrappedPosition.y;
                 }
             }
         this.stop = function() { this.stop = true;}
@@ -1635,20 +1566,11 @@ function geronimo() {
                         // check if possible to change direction without getting stuck
                         console.log("x: "+this.getGridPosX()+" + "+this.directionWatcher.get().dirX);
                         console.log("y: "+this.getGridPosY()+" + "+this.directionWatcher.get().dirY);
-                        var x = this.getGridPosX()+this.directionWatcher.get().dirX;
-                        var y = this.getGridPosY()+this.directionWatcher.get().dirY;
-                        // Bug fix: the original code assigned to `x` in the upward-wrap branch
-                        // (`if (y <= -1) x = ...`) and used the typo `game.heigth` in the
-                        // downward-wrap branch. Together this made pacman teleport horizontally
-                        // through the centre of the board when input pushed him off the top/bottom.
-                        if (x <= -1) x = game.width/(this.radius*2)-1;
-                        if (x >= game.width/(this.radius*2)) x = 0;
-                        if (y <= -1) y = game.height/(this.radius*2)-1;
-                        if (y >= game.height/(this.radius*2)) y = 0;
-
-                        var nextTile = game.map.posY[y].posX[x].type;
-
-                        if (nextTile != "wall") {
+                        if (PacmanMovement.canMoveTo(
+                            game.map,
+                            { x: this.getGridPosX(), y: this.getGridPosY() },
+                            this.directionWatcher.get()
+                        )) {
                             this.setDirection(this.directionWatcher.get());
                             this.directionWatcher.set(null);
                         }
@@ -1694,11 +1616,11 @@ function geronimo() {
                 this.posX += this.speed * this.dirX;
                 this.posY += this.speed * this.dirY;
 
-                // Check if out of canvas
-                if (this.posX >= game.width-this.radius) this.posX = 5-this.radius;
-                if (this.posX <= 0-this.radius) this.posX = game.width-5-this.radius;
-                if (this.posY >= game.height-this.radius) this.posY = 5-this.radius;
-                if (this.posY <= 0-this.radius) this.posY = game.height-5-this.radius;
+                var wrappedPosition = PacmanMovement.wrapPosition(
+                    { x: this.posX, y: this.posY }, game.width, game.height, this.radius
+                );
+                this.posX = wrappedPosition.x;
+                this.posY = wrappedPosition.y;
             }
             else this.dieAnimation();
         }
