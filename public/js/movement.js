@@ -108,18 +108,37 @@
     var tx = wrapCoord(Math.round(target.x), size.width);
     var ty = Math.max(0, Math.min(size.height - 1, Math.round(target.y)));
     var queue = [];
-    if (pathCell(map, tx, ty, size, allowDoor) !== 'wall') {
-      distances[ty][tx] = 0;
-      queue.push([tx, ty]);
-    } else {
-      var seeds = pathNeighbors(tx, ty, size);
-      for (var i = 0; i < seeds.length; i++) {
-        var sx = seeds[i][0];
-        var sy = seeds[i][1];
-        if (pathCell(map, sx, sy, size, allowDoor) !== 'wall' && distances[sy][sx] === Infinity) {
-          distances[sy][sx] = 1;
-          queue.push([sx, sy]);
-        }
+    var search = [[tx, ty, 0]];
+    var visited = Array.from({ length: size.height }, function () {
+      return Array(size.width).fill(false);
+    });
+    var nearestOpenDistance = null;
+    visited[ty][tx] = true;
+
+    // Scatter targets can be buried several wall cells deep (the shipped
+    // Blinky corner is one). Search the bounded, tunnel-wrapped grid outward
+    // and seed every passable cell in the first open distance layer.
+    for (var searchHead = 0; searchHead < search.length; searchHead++) {
+      var searchCell = search[searchHead];
+      var searchX = searchCell[0];
+      var searchY = searchCell[1];
+      var searchDistance = searchCell[2];
+      if (nearestOpenDistance !== null && searchDistance > nearestOpenDistance) break;
+
+      if (pathCell(map, searchX, searchY, size, allowDoor) !== 'wall') {
+        if (nearestOpenDistance === null) nearestOpenDistance = searchDistance;
+        distances[searchY][searchX] = searchDistance;
+        queue.push([searchX, searchY]);
+        continue;
+      }
+
+      var searchNeighbors = pathNeighbors(searchX, searchY, size);
+      for (var searchIndex = 0; searchIndex < searchNeighbors.length; searchIndex++) {
+        var nextSearchX = searchNeighbors[searchIndex][0];
+        var nextSearchY = searchNeighbors[searchIndex][1];
+        if (visited[nextSearchY][nextSearchX]) continue;
+        visited[nextSearchY][nextSearchX] = true;
+        search.push([nextSearchX, nextSearchY, searchDistance + 1]);
       }
     }
 

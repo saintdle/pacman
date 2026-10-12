@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { chooseGhostDirection, getGhostTarget } from '../src/client/movement.js';
 
 const UP = { name: 'up', dirX: 0, dirY: -1 };
@@ -58,6 +59,17 @@ test('wall and off-map targets fall back to reachable cells within map bounds', 
   assert.equal(route(map, { x: 1, y: 1 }, RIGHT, { x: 3, y: 1 }), RIGHT);
   assert.equal(route(map, { x: 0, y: 1 }, LEFT, { x: -1, y: 1 }), LEFT);
   assert.equal(route(map, { x: 2, y: 0 }, RIGHT, { x: 4, y: -10 }), RIGHT);
+});
+
+test('Blinky scatter routing resolves the shipped wall corner to its nearest maze cells', () => {
+  const map = JSON.parse(readFileSync(new URL('../public/data/map.json', import.meta.url), 'utf8'));
+  assert.equal(map.posY[0].posX[13].type, 'wall');
+  assert.equal(route(map, { x: 9, y: 1 }, RIGHT, { x: 13, y: 0 }), RIGHT);
+});
+
+test('blocked targets resolve through more than one wall layer', () => {
+  const map = makeMap(7, 7, [[3, 3], [3, 2], [2, 3], [4, 3], [3, 4]]);
+  assert.equal(route(map, { x: 2, y: 1 }, RIGHT, { x: 3, y: 3 }), DOWN);
 });
 
 test('ghost targets preserve scatter, chase, dead, and frightened mode behavior', () => {
