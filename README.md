@@ -50,6 +50,11 @@ the job. Same-repository pull requests also upload SARIF results for
 review in GitHub code scanning. This check does not push the image to Docker
 Hub.
 
+GitHub Actions workflows pin actions to commit SHAs. Dependabot checks npm
+packages and GitHub Actions weekly. Separate checks run CodeQL source analysis
+and `npm audit --audit-level=high` against the complete lockfile; the dependency
+audit fails on known high or critical vulnerabilities.
+
 ## Running with a real database
 
 Use the Docker Compose stack and pick a profile:
@@ -80,7 +85,7 @@ See [`.env.example`](.env.example) for the full set of variables.
 | Method | Path                 | Description                                                   |
 |--------|----------------------|---------------------------------------------------------------|
 | GET    | `/healthz`           | Liveness (no DB)                                              |
-| GET    | `/readyz`            | Readiness (DB healthcheck)                                    |
+| GET    | `/readyz`            | Readiness (DB healthcheck; optional upstream checks)          |
 | GET    | `/readyz/details`    | Readiness plus DB, upstream deps, and config details          |
 | GET    | `/version`           | Role, version, variant, commit, database, dependency map      |
 | GET    | `/metrics`           | Prometheus text metrics (requests, DB ops, upstream latency)  |
@@ -122,22 +127,43 @@ The HTTP route accepts JSON and form-encoded bodies. Submit `name`, `cloud`,
 
 | Rule                                                     | Response                                                 |
 |----------------------------------------------------------|----------------------------------------------------------|
-| `score` missing or not a number                          | `400 {"error":"score must be a number"}`               |
-| Parsed finite `level` outside `[1, MAX_LEVEL]`           | `400 {"error":"invalid level"}`                        |
-| Finite `level` and `score / level > 2840`                | `400 {"error":"score is implausible for level"}`       |
-| `level` missing or nonnumeric                            | Accepted; level checks are skipped and stored level is null |
-| Otherwise                                                | `200 {"rs":"success", ...}`                            |
+| Missing, nonnumeric, fractional, negative, or unsafe `score` | `400 {"error":"score must be a non-negative safe integer"}` |
+| Missing, nonnumeric, fractional, unsafe, or out-of-range `level` | `400 {"error":"invalid level"}` |
+| `score / level > 2840`                                    | `400 {"error":"score is implausible for level"}`       |
+| Otherwise                                                 | `200 {"rs":"success", ...}`                            |
 
 `MAX_LEVEL` defaults to `10`; set it to a positive integer for another cap or
 to `unlimited` for no upper bound. The per-level score cap is
 `2840 = 104 * 10 + 4 * 50 + 4 * 4 * 100`: 104 pills, four power pills, and four
 ghosts eaten four times during beast mode.
 
-The browser checks this cap before showing the high-score form. The HTTP routes
-also check it when `level` parses to a finite number. Missing or nonnumeric
-levels bypass those server checks and are stored as null. The gRPC `SubmitScore`
-method stores submitted scores without equivalent validation. Treat the cap as
-a plausibility check; it does not prove that a score is authentic.
+The browser checks this cap before showing the high-score form. Both HTTP score
+routes and gRPC `SubmitScore` validate decoded scores and levels, including the
+integer, non-negative, safe-score, and configured level-range requirements.
+gRPC returns `INVALID_ARGUMENT` for invalid submissions and sanitizes internal
+errors. Its wire format uses `int32`: an absent score decodes to zero and is
+accepted with a valid level, while an absent level decodes to zero and is
+rejected. Fractions and unsafe integers cannot be sent as such in that wire
+format. Treat the cap as a plausibility check; it does not prove that a score
+is authentic.
+
+### Proxy and readiness settings
+
+`TRUST_PROXY` defaults to `false`, so forwarded client-address headers are not
+trusted. Set it only to match the real ingress: use a non-negative hop count or
+a comma-separated list of proxy IPs, CIDRs, or named ranges (`loopback`,
+`linklocal`, `uniquelocal`). Named ranges are normalized case-insensitively.
+Direct external requests that supply forwarding headers are not trusted by the
+default setting.
+
+`READINESS_CHECK_UPSTREAMS` defaults to `false`. When enabled on the web role,
+`/readyz` checks configured upstream services' `/readyz` endpoints in parallel,
+with a 750 ms timeout per request and a one-hop probe marker to prevent cycles.
+The multi-role Kubernetes example enables this option. Upstream-aware readiness
+can remove a web pod from service while a backend is unavailable; leave it off
+when readiness should reflect only the local database. `/readyz/details` always
+includes web-role upstream probes. `/healthz` remains a liveness check and does
+not check the database.
 
 Examples:
 
@@ -242,6 +268,11 @@ When locked, `GET /config` includes
 `{"ebeeMode":true,"allowEbeeModeOverride":false}`, `POST /config` returns
 `403` for attempted eBee-mode changes, and the Settings checkbox is shown
 read-only.
+
+The browser loads `public/js/movement.js` synchronously. To regenerate the six
+instruction screenshots (normal and eBee themes), run
+`node tools/generate-instruction-screenshots.js`; the command uses the current
+maze and sprite rules.
 
 ### Kubernetes config examples
 
