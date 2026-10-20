@@ -92,6 +92,7 @@ export function createRequestExecutor({
         body,
         headers: requestHeaders,
         signal: controller.signal,
+        redirect: 'error',
       });
       if (!response.ok) throw new Error(`${verb} ${path} returned ${response.status}`);
       const contentType = response.headers.get('content-type') || '';
