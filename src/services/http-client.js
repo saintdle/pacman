@@ -22,6 +22,10 @@ export async function requestJson(baseUrl, path, { method = 'GET', body, headers
       },
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: controller.signal,
+      // Fetch only strips Authorization/Cookie on a cross-origin redirect, not
+      // our custom demo token header, so a redirecting backend could otherwise
+      // leak it to an arbitrary Location. Refuse to follow any redirect instead.
+      redirect: 'error',
     });
     const text = await res.text();
     const payload = text ? JSON.parse(text) : null;

@@ -45,6 +45,65 @@ function stopBackend(child) {
   child.kill();
 }
 
+// A plain HTTP server standing in for an attacker-controlled sink on a
+// different origin than the configured internal backend. Runs as its own
+// process (like startBackend) so it keeps serving requests while the
+// web-role process under test is driven synchronously via spawnSync below.
+function startSink() {
+  const script = `
+import { createServer } from 'node:http';
+const server = createServer((req, res) => {
+  process.stdout.write(JSON.stringify({ headers: req.headers }) + '\\n');
+  res.writeHead(200, { 'content-type': 'application/json' });
+  res.end('{}');
+});
+server.listen(0, '127.0.0.1', () => {
+  process.stdout.write(JSON.stringify({ port: server.address().port }) + '\\n');
+});
+`;
+  const child = spawn(process.execPath, ['--input-type=module', '-e', script]);
+  const seenHeaders = [];
+  return new Promise((resolve, reject) => {
+    const rl = readline.createInterface({ input: child.stdout });
+    child.once('error', reject);
+    let readyResolved = false;
+    rl.on('line', (line) => {
+      const msg = JSON.parse(line);
+      if (!readyResolved && msg.port !== undefined) {
+        readyResolved = true;
+        resolve({ child, port: msg.port, seenHeaders });
+        return;
+      }
+      if (msg.headers) seenHeaders.push(msg.headers);
+    });
+  });
+}
+
+// A separate-process HTTP server standing in for the real SCORE_SERVICE_URL
+// misbehaving (compromised, misconfigured, or malicious) and redirecting
+// cross-origin.
+function startRedirectingBackend(locationUrl) {
+  const script = `
+import { createServer } from 'node:http';
+const server = createServer((req, res) => {
+  res.writeHead(302, { location: ${JSON.stringify(locationUrl)} });
+  res.end();
+});
+server.listen(0, '127.0.0.1', () => {
+  process.stdout.write(JSON.stringify({ port: server.address().port }) + '\\n');
+});
+`;
+  const child = spawn(process.execPath, ['--input-type=module', '-e', script]);
+  return new Promise((resolve, reject) => {
+    const rl = readline.createInterface({ input: child.stdout });
+    child.once('error', reject);
+    rl.once('line', (line) => {
+      rl.close();
+      resolve({ child, port: JSON.parse(line).port });
+    });
+  });
+}
+
 const demoEnv = { DEMO_SECURITY_MODE: 'true', DEMO_TOKEN: 'secret-demo' };
 
 test('DEMO_SECURITY_MODE requires a nonempty DEMO_TOKEN', () => {
@@ -177,4 +236,69 @@ process.stdout.write(JSON.stringify({ status: res.status }));
 `;
   const out = runWithEnv({ APP_ROLE: 'web', SCORE_SERVICE_URL: 'http://127.0.0.1:1' }, script);
   assert.ok(out.status >= 500 && out.status <= 599);
+});
+
+test('a cross-origin redirect from the configured backend never reaches the sink with the demo token, default header', async () => {
+  const sink = await startSink();
+  const backend = await startRedirectingBackend(`http://127.0.0.1:${sink.port}/`);
+  try {
+    const script = `
+import request from 'supertest';
+import { MemoryAdapter } from './src/db/memory.js';
+import { createApp } from './src/app.js';
+const db = new MemoryAdapter();
+await db.connect();
+const app = createApp({ db });
+const res = await request(app).get('/highscores/list').set('x-demo-token', 'secret-demo');
+await db.disconnect();
+process.stdout.write(JSON.stringify({ status: res.status }));
+`;
+    const out = runWithEnv(
+      { ...demoEnv, APP_ROLE: 'web', SCORE_SERVICE_URL: `http://127.0.0.1:${backend.port}` },
+      script,
+    );
+
+    assert.ok(out.status >= 500 && out.status <= 599, `expected a genuine 5xx, got ${out.status}`);
+    assert.equal(sink.seenHeaders.length, 0, 'sink should never have been reached');
+  } finally {
+    stopBackend(backend.child);
+    stopBackend(sink.child);
+  }
+});
+
+test('a cross-origin redirect from the configured backend never reaches the sink with a custom token header', async () => {
+  const sink = await startSink();
+  const backend = await startRedirectingBackend(`http://127.0.0.1:${sink.port}/`);
+  try {
+    const script = `
+import request from 'supertest';
+import { MemoryAdapter } from './src/db/memory.js';
+import { createApp } from './src/app.js';
+const db = new MemoryAdapter();
+await db.connect();
+const app = createApp({ db });
+const res = await request(app).get('/highscores/list').set('x-custom-demo-token', 'secret-demo');
+await db.disconnect();
+process.stdout.write(JSON.stringify({ status: res.status }));
+`;
+    const out = runWithEnv(
+      {
+        ...demoEnv,
+        APP_ROLE: 'web',
+        SCORE_SERVICE_URL: `http://127.0.0.1:${backend.port}`,
+        DEMO_TOKEN_HEADER: 'x-custom-demo-token',
+      },
+      script,
+    );
+
+    assert.ok(out.status >= 500 && out.status <= 599, `expected a genuine 5xx, got ${out.status}`);
+    assert.equal(sink.seenHeaders.length, 0, 'sink should never have been reached');
+    assert.ok(
+      sink.seenHeaders.every((h) => h['x-custom-demo-token'] === undefined),
+      'custom demo token header must never reach the redirect destination',
+    );
+  } finally {
+    stopBackend(backend.child);
+    stopBackend(sink.child);
+  }
 });
