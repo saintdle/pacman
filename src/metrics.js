@@ -59,6 +59,8 @@ export function renderMetrics() {
     lines.push(`${name}{${withRole}} ${val}`);
   }
 
+  lines.push('# HELP pacman_http_request_duration_ms HTTP server request duration in milliseconds');
+  lines.push('# TYPE pacman_http_request_duration_ms histogram');
   lines.push('# HELP pacman_upstream_latency_ms Upstream request latency in milliseconds');
   lines.push('# TYPE pacman_upstream_latency_ms histogram');
   for (const [base, h] of Object.entries(histograms)) {
@@ -109,11 +111,17 @@ export function routeLabel(req) {
 // Express middleware — counts every request by method, route group, and status.
 export function metricsMiddleware() {
   return (req, res, next) => {
+    const start = performance.now();
     res.on('finish', () => {
+      const route = routeLabel(req);
       incCounter('pacman_http_requests_total', {
         method: req.method,
-        route: routeLabel(req),
+        route,
         status: String(res.statusCode),
+      });
+      observeHistogram('pacman_http_request_duration_ms', performance.now() - start, {
+        method: req.method,
+        route,
       });
     });
     next();

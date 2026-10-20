@@ -2,7 +2,11 @@ import { config } from '../config/index.js';
 
 export function demoAuthorized(req) {
   const header = config.DEMO_TOKEN_HEADER.toLowerCase();
-  return config.DEMO_SECURITY_MODE && req.headers[header] === config.DEMO_TOKEN;
+  return (
+    config.DEMO_SECURITY_MODE
+    && config.DEMO_TOKEN !== ''
+    && req.headers[header] === config.DEMO_TOKEN
+  );
 }
 
 export function requireDemoAccess(req, res) {

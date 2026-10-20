@@ -1,4 +1,7 @@
 import { incCounter, observeHistogram } from '../metrics.js';
+import { config } from '../config/index.js';
+import { demoAuthorized } from '../demo/guard.js';
+import { FAULT_HEADER_NAMES } from '../middleware/demo-fault.js';
 
 const DEFAULT_TIMEOUT_MS = 2000;
 
@@ -37,11 +40,27 @@ export async function requestJson(baseUrl, path, { method = 'GET', body, headers
   }
 }
 
+// Forwards the demo token and any unconsumed, allowlisted fault headers to an
+// internal backend only when the inbound request is itself demo-authorized.
+// A fault already consumed by this role was deleted from req.headers by
+// demoFaultMiddleware, so it is never re-sent downstream.
+function demoForwardHeaders(req) {
+  if (!demoAuthorized(req)) return {};
+
+  const tokenHeader = config.DEMO_TOKEN_HEADER.toLowerCase();
+  const headers = { [tokenHeader]: req.headers[tokenHeader] };
+  for (const name of FAULT_HEADER_NAMES) {
+    if (req.headers[name] !== undefined) headers[name] = req.headers[name];
+  }
+  return headers;
+}
+
 export function passThroughHeaders(req) {
   return {
     'x-forwarded-host': req.hostname,
     'x-forwarded-for': req.ip,
     'user-agent': req.headers['user-agent'] ?? 'pacman-internal-client',
     ...(req.headers.referer ? { referer: req.headers.referer } : {}),
+    ...demoForwardHeaders(req),
   };
 }

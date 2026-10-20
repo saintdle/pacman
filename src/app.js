@@ -36,8 +36,8 @@ export function createApp({ db }) {
   app.use(pinoHttp({ logger }));
   app.use(express.json());
   app.use(express.urlencoded({ extended: false }));
-  app.use(demoFaultMiddleware());
   app.use(metricsMiddleware());
+  app.use(demoFaultMiddleware());
 
   app.use('/', express.static(path.join(repoRoot, 'public')));
 

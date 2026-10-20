@@ -69,10 +69,15 @@ const schema = z.object({
   READINESS_CHECK_UPSTREAMS: boolish.default(false),
 
   // Lab-only demo controls. Fault/incident actions require both
-  // DEMO_SECURITY_MODE=true and the configured token header.
+  // DEMO_SECURITY_MODE=true and the configured token header. The token has no
+  // default value: lab mode may only be enabled with an explicit secret.
   DEMO_SECURITY_MODE: boolish.default(false),
   DEMO_TOKEN_HEADER: z.string().default('x-demo-token'),
-  DEMO_TOKEN: z.string().default('pacman-demo'),
+  DEMO_TOKEN: z.string().default(''),
+  // Synthetic security probes stay off even when lab mode is on; each must be
+  // explicitly enabled.
+  DEMO_FILE_PROBE_ENABLED: boolish.default(false),
+  DEMO_EXEC_PROBE_ENABLED: boolish.default(false),
 
   // Mongo
   MONGO_SERVICE_HOST: z.string().default('localhost'),
@@ -145,6 +150,14 @@ const schema = z.object({
   LIVE_STATS_MAX_AGE_SECONDS: z.coerce.number().int().positive().default(300),
   LIVE_STATS_PAGE_SIZE: z.coerce.number().int().positive().max(100).default(10),
   SIMULATED_USERS_ENABLED: boolish.default(false),
+}).superRefine((value, ctx) => {
+  if (value.DEMO_SECURITY_MODE && value.DEMO_TOKEN.trim() === '') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['DEMO_TOKEN'],
+      message: 'DEMO_TOKEN must be set when DEMO_SECURITY_MODE is enabled',
+    });
+  }
 });
 
 const parsed = schema.safeParse(process.env);
