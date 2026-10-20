@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
 import { loadSimulatorSettings } from '../tools/simulator/config.js';
 import {
   createFaultSelector,
@@ -9,7 +10,7 @@ import {
 import { createProbeScheduler, SECURITY_PROBE_REQUESTS } from '../tools/simulator/probes.js';
 import { createRandom } from '../tools/simulator/random.js';
 import { createMetrics, createRequestExecutor } from '../tools/simulator/request.js';
-import { isValidScoreSubmission, submitScore } from '../tools/simulate-users.js';
+import { isValidScoreSubmission, runSimulator, submitScore } from '../tools/simulate-users.js';
 
 function enabledFaults(overrides = {}) {
   return {
@@ -428,4 +429,92 @@ test('only valid successful score writes increment scoresSubmitted, with no writ
   assert.equal(calls, 2);
   assert.deepEqual(metrics.scoreSubmissions, { attempted: 2, succeeded: 1, failed: 1, invalid: 1 });
   assert.equal(metrics.scoresSubmitted, 1);
+});
+
+test('a real simulator session makes a faultable live user-stats read after bootstrap', async () => {
+  const requests = [];
+  const server = createServer((req, res) => {
+    req.resume();
+    const url = new URL(req.url, 'http://127.0.0.1');
+    requests.push({ method: req.method, path: url.pathname, headers: req.headers });
+
+    let status = 200;
+    let payload = {};
+    if (url.pathname === '/config') payload = { maxLevel: 10 };
+    else if (url.pathname === '/location/metadata') payload = {};
+    else if (url.pathname === '/user/id') payload = 'fixture-user-id';
+    else if (url.pathname === '/user/stats' && req.method === 'POST') {
+      payload = { rs: 'success' };
+    } else if (url.pathname === '/user/stats' && req.method === 'GET') {
+      if (req.headers['x-demo-fault-operation'] === 'userRead') status = 503;
+      payload = [];
+    }
+
+    res.writeHead(status, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(payload));
+  });
+
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+
+  try {
+    const metrics = await runSimulator({
+      PACMAN_BASE_URL: `http://127.0.0.1:${server.address().port}`,
+      USERS: '1',
+      DURATION_SECONDS: '1',
+      STATIC_PATHS: '',
+      MIN_THINK_MS: '1',
+      MAX_THINK_MS: '1',
+      MIN_SESSION_SECONDS: '1',
+      MAX_SESSION_SECONDS: '1',
+      MIN_SESSION_GAP_MS: '0',
+      MAX_SESSION_GAP_MS: '0',
+      HIGH_SCORE_READ_RATE: '0',
+      SCORE_SUBMIT_RATE: '0',
+      FINAL_SCORE_SUBMIT_RATE: '0',
+      DEMO_SECURITY_MODE: 'true',
+      DEMO_TOKEN: 'simulator-loop-test-token',
+      SIM_FAULTS_JSON: JSON.stringify(
+        enabledFaults({
+          durationSeconds: 60,
+          rules: [
+            {
+              operations: ['userRead'],
+              targetRole: 'user',
+              errorRate: 1,
+              errorStatus: 503,
+              delayRate: 0,
+              delayMs: { min: 0, max: 0 },
+            },
+          ],
+        }),
+      ),
+    });
+
+    const statsReads = requests.filter(
+      ({ method, path }) => method === 'GET' && path === '/user/stats',
+    );
+    const userReadFaults = statsReads.filter(
+      ({ headers }) => headers['x-demo-fault-operation'] === 'userRead',
+    );
+    const userBootstrap = requests.filter(
+      ({ method, path }) => method === 'GET' && path === '/user/id',
+    );
+
+    assert.ok(statsReads.length >= 1, 'the simulator should read live user stats');
+    assert.equal(userReadFaults.length, statsReads.length);
+    assert.equal(userReadFaults[0].headers['x-demo-fault-role'], 'user');
+    assert.equal(userReadFaults[0].headers['x-demo-fault-status'], '503');
+    assert.ok(userBootstrap.length >= 1);
+    assert.equal(userBootstrap[0].headers['x-demo-fault-operation'], undefined);
+    assert.equal(userBootstrap[0].headers['x-demo-token'], undefined);
+    assert.ok(metrics.requests.failed >= statsReads.length);
+  } finally {
+    await new Promise((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+      server.closeAllConnections();
+    });
+  }
 });

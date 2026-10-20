@@ -305,10 +305,11 @@ Example ConfigMap and patch files live under [`k8s/examples`](k8s/examples):
   [`overlays/prometheus`](k8s/examples/overlays/prometheus), and
   [`overlays/tetragon`](k8s/examples/overlays/tetragon) apply optional
   CRD-backed resources only when those controllers are installed.
-- [`helm-values.yaml`](k8s/examples/helm-values.yaml) shows a Helm-style
-  values fragment for the published
-  [`saintdle/pacman` Helm chart](https://github.com/saintdle/helm-charts/tree/main/charts/pacman).
-  It is not a raw manifest and should be passed to Helm, not `kubectl`.
+- [`helm-values.yaml`](k8s/examples/helm-values.yaml) contains demo values for
+  a matching candidate chart and app image. The published defaults remain
+  unchanged. See [`k8s/examples/README.md`](k8s/examples/README.md) for Secret
+  setup and candidate install guidance. Pass this fragment to Helm with
+  `--values`.
 - [`values-openshift.yaml`](k8s/examples/values-openshift.yaml) documents the
   OpenShift override values for that chart (`openShift.enabled` and
   `openShift.sccRoleBinding.create`). The complete chart values schema lives in

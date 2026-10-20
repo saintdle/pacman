@@ -126,6 +126,18 @@ async function updateStats(session, options) {
   });
 }
 
+async function readStats(session, options) {
+  if (!session.userId) return null;
+  return options.request(options.baseUrl, '/user/stats?includeSimulated=true', {
+    timeoutMs: options.timeoutMs,
+    optional: true,
+    headers: {
+      'user-agent': session.userAgent,
+      'x-pacman-simulator-session': String(session.sessionId),
+    },
+  });
+}
+
 export function isValidScoreSubmission(session) {
   if (!Number.isSafeInteger(session.score) || session.score < 0) return false;
   if (!Number.isSafeInteger(session.level) || session.level < 1) return false;
@@ -210,6 +222,7 @@ async function runUserSession(sessionId, options, random, now) {
 
   await loadBrowserShell(session, options, random);
   const sessionEndsAt = now() + random.int(options.minSessionMs, options.maxSessionMs);
+  let readLiveStats = false;
 
   while (!stopping && now() < sessionEndsAt && !options.deadlineExpired()) {
     session.elapsedTime += random.int(1, 6);
@@ -226,6 +239,10 @@ async function runUserSession(sessionId, options, random, now) {
     if (random.chance(0.04)) session.lives = Math.max(1, session.lives - 1);
 
     await updateStats(session, options);
+    if (!readLiveStats) {
+      await readStats(session, options);
+      readLiveStats = true;
+    }
 
     if (random.chance(options.highScoreReadRate)) {
       await options.request(options.baseUrl, '/highscores/list', {
