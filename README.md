@@ -335,23 +335,42 @@ preserving local in-process behavior when the URLs are unset.
 also included in `GET /config` so the Settings panel can show which backend
 variant handled the request.
 
-Lab-only fault and incident hooks are double gated. They require both:
+Lab-only fault and incident hooks are disabled by default. They require both
+`DEMO_SECURITY_MODE=true` and a nonempty `DEMO_TOKEN`; the token has no default.
+The configured header defaults to `x-demo-token`:
 
 ```bash
 DEMO_SECURITY_MODE=true
 DEMO_TOKEN_HEADER=x-demo-token
-DEMO_TOKEN=pacman-demo
+DEMO_TOKEN=<value-from-a-secret>
 ```
 
-The example token is public. If demo mode is enabled on an exposed service, use
-a per-deployment token from a Kubernetes Secret.
+In Kubernetes, provide the token through a Secret. The file and exec probes
+also have separate `DEMO_FILE_PROBE_ENABLED` and `DEMO_EXEC_PROBE_ENABLED`
+switches, both false by default, even when demo mode is enabled.
 
-With the correct token header, demos can inject controlled HTTP delay/status
-responses using `x-demo-fault-delay-ms` and `x-demo-fault-status`, record a
-structured incident with `POST /demo/incidents`, or trigger safe Tetragon probes
-with `POST /demo/incidents/file-probe` and `POST /demo/incidents/exec-probe`.
-With demo mode disabled, those incident actions return `403` and normal gameplay
-is unaffected.
+Send the token header with a request to authorize lab actions. Fault requests
+also specify `x-demo-fault-role` (`web`, `score`, or `user`) and
+`x-demo-fault-operation` (`scoreRead`, `scoreWrite`, `userRead`, `userWrite`, or
+`pageView`). Optional `x-demo-fault-delay-ms` is bounded from 0 to 10,000 ms.
+`x-demo-fault-status` accepts values from 500 to 599. A fault applies only when
+both its role and logical operation match the receiving app. The web role can
+be selected for any listed operation. The score backend handles score
+operations, and the user backend handles user operations. On a proxied request,
+web forwards only the authenticated token and allowlisted fault headers. The
+selected logical request consumes the fault once. Health, readiness, config,
+metrics, and demo endpoints are exempt from fault selection. Forwarded
+client-address headers are not trusted by default (`TRUST_PROXY=false`). The
+app does not follow backend redirects, so it cannot send the token to a redirect
+destination.
+
+The authorized incident endpoints are `POST /demo/incidents`,
+`POST /demo/incidents/file-probe`, and `POST /demo/incidents/exec-probe`. The
+security probes use only the fixed synthetic file
+`/app/demo-fixtures/synthetic-secret.txt` and the fixed helper
+`/app/tools/demo-exec-probe.js`; callers cannot provide arbitrary paths,
+commands, or URLs. Demo controls return `403` without authorization, and
+gameplay is unaffected when controls are disabled.
 
 ### Synthetic user simulator
 
