@@ -61,7 +61,7 @@ async function smokeImage({ platform, image }) {
   assert.ok(command.includes('src/server.js'), `${image} must default to the server entrypoint`);
   assert.ok(healthcheck.join(' ').includes('tools/healthcheck.js'), `${image} must use its Node healthcheck`);
 
-  const nodeCheck = `const fs=require('node:fs');const h=process.report.getReport().header;const forbidden=['/bin/sh','/bin/bash','/usr/bin/sh','/usr/bin/bash','/usr/bin/npm','/usr/local/bin/npm','/usr/bin/npx','/usr/local/bin/npx','/usr/bin/wget','/usr/bin/curl','/usr/local/bin/wget','/usr/local/bin/curl','/app/tools/check-container-image-contract.js','/app/tools/smoke-container-images.js'];const present=forbidden.filter(p=>fs.existsSync(p));const fixture=fs.readFileSync('/app/demo-fixtures/synthetic-secret.txt','utf8').trim();if(!h.glibcVersionRuntime||present.length||!fixture.includes('${FIXTURE_MARKER}'))process.exit(1);console.log(JSON.stringify({node:process.version,glibc:h.glibcVersionRuntime,forbidden:present,fixturePresent:true}));`;
+  const nodeCheck = `const fs=require('node:fs');const h=process.report.getReport().header;const forbidden=['/bin/sh','/bin/bash','/usr/bin/sh','/usr/bin/bash','/usr/bin/npm','/usr/local/bin/npm','/usr/bin/npx','/usr/local/bin/npx','/usr/bin/wget','/usr/bin/curl','/usr/local/bin/wget','/usr/local/bin/curl','/app/tools/check-container-image-contract.js','/app/tools/smoke-container-images.js'];const present=forbidden.filter(p=>fs.existsSync(p));const fixture=fs.readFileSync('/app/demo-fixtures/synthetic-secret.txt','utf8').trim();const execProbeExecutable=(fs.statSync('/app/tools/demo-exec-probe.js').mode&0o111)!==0;if(!h.glibcVersionRuntime||present.length||!fixture.includes('${FIXTURE_MARKER}')||!execProbeExecutable)process.exit(1);console.log(JSON.stringify({node:process.version,glibc:h.glibcVersionRuntime,forbidden:present,fixturePresent:true,execProbeExecutable}));`;
   const runtimeInfo = JSON.parse(docker([
     'run', '--rm', '--platform', platform, '--user', '12345:23456', '--entrypoint', NODE_PATH,
     image, '-e', nodeCheck,
@@ -70,8 +70,8 @@ async function smokeImage({ platform, image }) {
   assert.deepEqual(runtimeInfo.forbidden, [], `${image} must exclude shell/npm/wget/curl`);
 
   const probe = docker([
-    'run', '--rm', '--platform', platform, '--user', '12345:23456', '--entrypoint', NODE_PATH,
-    image, '/app/tools/demo-exec-probe.js',
+    'run', '--rm', '--platform', platform, '--user', '12345:23456', '--read-only',
+    '--tmpfs', '/tmp:rw,nosuid,size=64m', '--entrypoint', '/app/tools/demo-exec-probe.js', image,
   ]);
   assert.equal(probe, EXEC_PROBE_MARKER, `${image} must include and run the fixed marked exec probe`);
 
