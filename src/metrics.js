@@ -79,6 +79,18 @@ export function renderMetrics() {
   return lines.join('\n');
 }
 
+// Security demo probe routes whose bounded, fixed identity must survive
+// Express's error unwinding: when a mounted router's handler calls
+// next(err), Express restores req.baseUrl to the parent router's value
+// (here, '') before the error reaches the app-level handler and this
+// middleware's 'finish' listener runs, even though req.route still names
+// the match that was made. This explicit allowlist recovers the known,
+// fixed label for those two routes without labeling arbitrary URLs.
+const KNOWN_ERROR_UNWOUND_ROUTES = new Map([
+  ['/incidents/file-probe', '/demo/incidents/file-probe'],
+  ['/incidents/exec-probe', '/demo/incidents/exec-probe'],
+]);
+
 export function routeLabel(req) {
   const path = (req.originalUrl || req.path || '/').split('?')[0];
   if (path === '/metrics') return '/metrics';
@@ -86,6 +98,11 @@ export function routeLabel(req) {
 
   if (req.baseUrl && req.route?.path) {
     return `${req.baseUrl}${req.route.path === '/' ? '' : req.route.path}`;
+  }
+
+  if (!req.baseUrl && req.route?.path) {
+    const known = KNOWN_ERROR_UNWOUND_ROUTES.get(req.route.path);
+    if (known && path === known) return known;
   }
 
   if (
