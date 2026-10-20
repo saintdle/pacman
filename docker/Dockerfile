@@ -1,11 +1,23 @@
 # syntax=docker/dockerfile:1.7
 
-FROM node:22-alpine AS deps
+FROM node:22-bookworm-slim AS build
 WORKDIR /app
-COPY package.json package-lock.json* ./
+COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
-FROM node:22-alpine AS runtime
+COPY proto ./proto
+COPY src ./src
+COPY tools ./tools
+COPY views ./views
+COPY public ./public
+COPY demo-fixtures ./demo-fixtures
+
+# OpenShift may assign any UID. The app runs read-only and every runtime file
+# must be readable without relying on a particular group membership.
+RUN chmod -R a+rX /app \
+  && rm -f /app/tools/check-container-image-contract.js /app/tools/smoke-container-images.js
+
+FROM gcr.io/distroless/nodejs22-debian12:nonroot AS runtime
 ARG APP_VERSION=dev
 ARG COMMIT_SHA=unknown
 ARG BUILD_DATE=unknown
@@ -20,26 +32,11 @@ LABEL org.opencontainers.image.version=$APP_VERSION \
       org.opencontainers.image.created=$BUILD_DATE
 WORKDIR /app
 
-# Copy production deps and source
-COPY --from=deps /app/node_modules ./node_modules
-COPY package.json ./
-COPY proto ./proto
-COPY src ./src
-COPY tools ./tools
-COPY views ./views
-COPY public ./public
-
-RUN apk upgrade --no-cache \
-  && rm -rf /usr/local/lib/node_modules/npm \
-  && rm -f /usr/local/bin/npm /usr/local/bin/npx
-
-# Drop privileges; group-root ownership lets arbitrary (OpenShift) UIDs read the app
-RUN addgroup -S app && adduser -S app -G app && chown -R app:0 /app && chmod -R g=u /app
-USER app
+COPY --from=build --chown=0:0 /app /app
+USER 65532:65532
 
 EXPOSE 8080
 
-HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 \
-  CMD wget -qO- http://127.0.0.1:8080/healthz >/dev/null || exit 1
-
-CMD ["node", "src/server.js"]
+HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 CMD ["/nodejs/bin/node", "tools/healthcheck.js"]
+ENTRYPOINT ["/nodejs/bin/node"]
+CMD ["src/server.js"]

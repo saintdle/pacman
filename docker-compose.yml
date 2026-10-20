@@ -68,7 +68,8 @@ services:
 
   postgres-migrate:
     image: pacman:dev
-    command: ["node", "src/db/migrate.js"]
+    entrypoint: ["/nodejs/bin/node"]
+    command: ["src/db/migrate.js"]
     environment:
       DB_TYPE: postgres
       POSTGRES_HOST: postgres
