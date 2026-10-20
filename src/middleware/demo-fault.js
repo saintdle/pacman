@@ -90,7 +90,10 @@ export function demoFaultMiddleware() {
     }
 
     if (fault.status) {
-      incCounter('pacman_demo_faults_total', { role: fault.role, operation: fault.operation, status: String(fault.status) });
+      // `role` is added globally by renderMetrics(); fault.role is always
+      // config.APP_ROLE here (see isIntendedTarget above), so omit it to
+      // avoid emitting a duplicate role label in the exposition output.
+      incCounter('pacman_demo_faults_total', { operation: fault.operation, status: String(fault.status) });
       req.log?.warn({ role: fault.role, operation: fault.operation, status: fault.status }, 'demo fault injected');
       return res.status(fault.status).json({ error: 'demo fault injected', status: fault.status });
     }

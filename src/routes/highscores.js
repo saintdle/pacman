@@ -71,7 +71,7 @@ export function highscoresRouter() {
       });
     } catch (err) {
       req.log?.error({ err }, 'failed to insert highscore');
-      res.json({
+      res.status(err.status ?? 500).json({
         name: req.body?.name,
         zone: req.body?.zone,
         score: Number.parseInt(req.body?.score, 10),
