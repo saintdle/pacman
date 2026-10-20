@@ -69,6 +69,12 @@ async function smokeImage({ platform, image }) {
   assert.match(runtimeInfo.glibc, /^\d+\.\d+$/, `${image} must run against glibc`);
   assert.deepEqual(runtimeInfo.forbidden, [], `${image} must exclude shell/npm/wget/curl`);
 
+  const namedNodeVersion = docker([
+    'run', '--rm', '--platform', platform, '--user', '12345:23456', '--read-only',
+    '--tmpfs', '/tmp:rw,nosuid,size=64m', '--entrypoint', 'node', image, '--version',
+  ]);
+  assert.match(namedNodeVersion, /^v22\./, `${image} must resolve the Node executable by name under an arbitrary UID`);
+
   const probe = docker([
     'run', '--rm', '--platform', platform, '--user', '12345:23456', '--read-only',
     '--tmpfs', '/tmp:rw,nosuid,size=64m', '--entrypoint', '/app/tools/demo-exec-probe.js', image,
