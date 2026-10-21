@@ -1,4 +1,5 @@
 import express from 'express';
+import { rateLimit } from 'express-rate-limit';
 import pinoHttp from 'pino-http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,7 +13,7 @@ import { versionRouter } from './routes/version.js';
 import { demoRouter } from './routes/demo.js';
 import { metricsRouter } from './routes/metrics.js';
 import { internalRouter } from './routes/internal.js';
-import { demoFaultMiddleware } from './middleware/demo-fault.js';
+import { demoFaultMiddleware, FAULT_HEADER_NAMES } from './middleware/demo-fault.js';
 import { metricsMiddleware } from './metrics.js';
 import { config } from './config/index.js';
 
@@ -37,6 +38,14 @@ export function createApp({ db }) {
   app.use(express.json());
   app.use(express.urlencoded({ extended: false }));
   app.use(metricsMiddleware());
+  app.use(rateLimit({
+    windowMs: 60_000,
+    limit: 30,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+    message: { error: 'too many demo fault requests' },
+    skip: (req) => !FAULT_HEADER_NAMES.some((name) => req.headers[name] !== undefined),
+  }));
   app.use(demoFaultMiddleware());
 
   app.use('/', express.static(path.join(repoRoot, 'public')));

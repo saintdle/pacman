@@ -5,6 +5,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { rateLimit } from 'express-rate-limit';
 import { config } from '../config/index.js';
 import { requireDemoAccess } from '../demo/guard.js';
 
@@ -29,6 +30,14 @@ const DISTROLESS_NODE_BIN = '/nodejs/bin/node';
 
 export function demoRouter() {
   const router = Router();
+
+  router.use(rateLimit({
+    windowMs: 60_000,
+    limit: 30,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+    message: { error: 'too many demo requests' },
+  }));
 
   router.get('/status', (req, res) => {
     res.json({
