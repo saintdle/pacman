@@ -79,16 +79,32 @@ export function renderMetrics() {
   return lines.join('\n');
 }
 
-// Security demo probe routes whose bounded, fixed identity must survive
-// Express's error unwinding: when a mounted router's handler calls
-// next(err), Express restores req.baseUrl to the parent router's value
-// (here, '') before the error reaches the app-level handler and this
-// middleware's 'finish' listener runs, even though req.route still names
-// the match that was made. This explicit allowlist recovers the known,
-// fixed label for those two routes without labeling arbitrary URLs.
-const KNOWN_ERROR_UNWOUND_ROUTES = new Map([
-  ['/incidents/file-probe', '/demo/incidents/file-probe'],
-  ['/incidents/exec-probe', '/demo/incidents/exec-probe'],
+// Fixed identities for known API routes let metrics recover the route when
+// early middleware responds before routing or Express unwinds an error and
+// clears req.baseUrl. Keep this an explicit method/path allowlist so unknown
+// URLs never become metric labels.
+const KNOWN_ROUTES = new Map([
+  ['GET /version', '/version'],
+  ['GET /metrics', '/metrics'],
+  ['GET /demo/status', '/demo/status'],
+  ['POST /demo/incidents', '/demo/incidents'],
+  ['POST /demo/incidents/file-probe', '/demo/incidents/file-probe'],
+  ['POST /demo/incidents/exec-probe', '/demo/incidents/exec-probe'],
+  ['GET /config', '/config'],
+  ['GET /config/schema', '/config/schema'],
+  ['POST /config', '/config'],
+  ['GET /internal/score/read', '/internal/score/read'],
+  ['POST /internal/score/write', '/internal/score/write'],
+  ['GET /internal/user/session', '/internal/user/session'],
+  ['GET /internal/user/stats', '/internal/user/stats'],
+  ['POST /internal/user/stats', '/internal/user/stats'],
+  ['GET /internal/config/read', '/internal/config/read'],
+  ['GET /highscores/list', '/highscores/list'],
+  ['POST /highscores', '/highscores'],
+  ['GET /user/id', '/user/id'],
+  ['GET /user/stats', '/user/stats'],
+  ['POST /user/stats', '/user/stats'],
+  ['GET /location/metadata', '/location/metadata'],
 ]);
 
 export function routeLabel(req) {
@@ -100,10 +116,8 @@ export function routeLabel(req) {
     return `${req.baseUrl}${req.route.path === '/' ? '' : req.route.path}`;
   }
 
-  if (!req.baseUrl && req.route?.path) {
-    const known = KNOWN_ERROR_UNWOUND_ROUTES.get(req.route.path);
-    if (known && path === known) return known;
-  }
+  const known = KNOWN_ROUTES.get(`${req.method} ${path}`);
+  if (known && (!req.baseUrl || !req.route)) return known;
 
   if (
     path === '/'

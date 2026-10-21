@@ -2,6 +2,9 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import request from 'supertest';
+import { createApp } from '../src/app.js';
+import { MemoryAdapter } from '../src/db/memory.js';
+import { config } from '../src/config/index.js';
 import { metricsMiddleware, renderMetrics } from '../src/metrics.js';
 
 // Mirrors the real /demo router shape in src/routes/demo.js: a sub-router
@@ -117,4 +120,69 @@ describe('routeLabel survives Express error-unwinding for known demo probe route
       'query parameters must never be reflected into a route label',
     );
   });
+});
+
+test('main API failures keep the route label through injection and error unwinding', async () => {
+  const previous = {
+    APP_ROLE: config.APP_ROLE,
+    SCORE_SERVICE_URL: config.SCORE_SERVICE_URL,
+    DEMO_SECURITY_MODE: config.DEMO_SECURITY_MODE,
+    DEMO_TOKEN: config.DEMO_TOKEN,
+  };
+  const token = 'metrics-route-label-test-token';
+  const db = new MemoryAdapter();
+  const app = createApp({ db });
+
+  try {
+    config.APP_ROLE = 'web';
+    config.SCORE_SERVICE_URL = undefined;
+    config.DEMO_SECURITY_MODE = true;
+    config.DEMO_TOKEN = token;
+
+    const healthy = await request(app).get('/highscores/list');
+    const injected = await request(app)
+      .get('/highscores/list')
+      .set('x-demo-token', token)
+      .set('x-demo-fault-role', 'web')
+      .set('x-demo-fault-operation', 'scoreRead')
+      .set('x-demo-fault-status', '503');
+
+    const originalListTopScores = db.listTopScores;
+    db.listTopScores = async () => {
+      throw new Error('simulated adapter failure');
+    };
+    const adapterFailure = await request(app).get('/highscores/list');
+    db.listTopScores = originalListTopScores;
+
+    const unknownPath = '/profiles/private-route-label-fixture';
+    const unknown = await request(app).get(`${unknownPath}?token=private-fixture`);
+    assert.equal(healthy.status, 200);
+    assert.equal(injected.status, 503);
+    assert.equal(adapterFailure.status, 500);
+    assert.equal(unknown.status, 404);
+
+    const metricsText = renderMetrics();
+    for (const status of ['200', '503', '500']) {
+      assert.ok(
+        hasCounterSample(metricsText, 'pacman_http_requests_total', [
+          'method="GET"',
+          'route="/highscores/list"',
+          `status="${status}"`,
+        ]),
+        `expected GET /highscores/list status ${status} to keep its bounded route label:\n${metricsText}`,
+      );
+    }
+    assert.ok(
+      hasCounterSample(metricsText, 'pacman_http_requests_total', [
+        'method="GET"',
+        'route="unknown"',
+        'status="404"',
+      ]),
+      'unknown URLs must remain in the bounded unknown bucket',
+    );
+    assert.ok(!metricsText.includes(unknownPath), 'unknown paths must not become metric labels');
+    assert.ok(!metricsText.includes('private-fixture'), 'query strings must not become metric labels');
+  } finally {
+    Object.assign(config, previous);
+  }
 });
