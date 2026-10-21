@@ -445,7 +445,7 @@ public/               Static game assets (served as-is)
 views/                Pug error template
 test/                 Tests
 k8s/examples/         Kubernetes, Cilium, Tetragon, and Prometheus manifests
-docker/Dockerfile     Multi-stage, node:22-alpine, non-root, HEALTHCHECK
+docker/Dockerfile     Multi-stage, Node 22 on Debian 13, distroless non-root, HEALTHCHECK
 docker-compose.yml    memory / mongo / postgres profiles
 ```
 

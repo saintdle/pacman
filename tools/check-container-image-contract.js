@@ -26,8 +26,8 @@ export function validateContainerImageContract({
   const healthcheckCommand = healthcheckMatch?.[0].match(/\bCMD\s+(\[[^\n]+\])$/)?.[1];
   const healthcheck = healthcheckCommand ? JSON.parse(healthcheckCommand) : [];
 
-  failUnless(buildBases.some((base) => /^node:22-bookworm-slim(?:@|$)/.test(base)), 'the build must use Node 22 on Debian so native dependencies share glibc with the runtime');
-  failUnless(/^gcr\.io\/distroless\/nodejs22-debian12(?::\S+)?$/.test(finalFrom), 'the final image must use the Debian 12 distroless Node runtime');
+  failUnless(buildBases.some((base) => /^node:22-trixie-slim(?:@|$)/.test(base)), 'the build must use Node 22 on Debian 13 so native dependencies share glibc with the runtime');
+  failUnless(/^gcr\.io\/distroless\/nodejs22-debian13(?::\S+)?$/.test(finalFrom), 'the final image must use the Debian 13 distroless Node runtime');
   failUnless(/:nonroot$/.test(finalFrom), 'the final distroless image must select its nonroot variant');
   failUnless(/PATH=["']?\/nodejs\/bin:/.test(runtime), 'the runtime PATH must resolve the distroless Node binary by name');
   failUnless(entrypoint.length > 0 && /(?:^|\/)node$/.test(entrypoint[0]), 'the runtime entrypoint must invoke Node directly');
