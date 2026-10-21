@@ -24,13 +24,14 @@ const ajaxHelpers = [
 ].join('\n');
 const keyHandlerSource = sourceBetween('    function doKeyDown(evt){', '\n}\n\ngeronimo();');
 
-function makeBrowserGame({ confirmations = [], prompts = [] } = {}) {
+function makeBrowserGame({ confirmations = [], prompts = [], deferUserIds = false } = {}) {
   const timeoutCallbacks = [];
   const confirmationResults = [...confirmations];
   const promptResults = [...prompts];
   const elements = new Map();
   const statsPosts = [];
   const scorePosts = [];
+  const userIdCallbacks = [];
   let animationLoopStarts = 0;
   let userIdRequests = 0;
   let promptCount = 0;
@@ -96,7 +97,8 @@ function makeBrowserGame({ confirmations = [], prompts = [] } = {}) {
     }
     if (options.url.startsWith('user/id?name=')) {
       userIdRequests += 1;
-      options.success(`session-${userIdRequests}`);
+      if (deferUserIds) userIdCallbacks.push(options.success);
+      else options.success(`session-${userIdRequests}`);
       return;
     }
     if (options.url === 'user/stats') {
@@ -171,6 +173,10 @@ function makeBrowserGame({ confirmations = [], prompts = [] } = {}) {
     },
     get promptCount() {
       return promptCount;
+    },
+    completeUserIdRequest(index, id) {
+      assert.ok(userIdCallbacks[index], `expected a pending user ID request at index ${index}`);
+      userIdCallbacks[index](id);
     },
     get overlayText() {
       return getElement('#canvas-overlay-content #text').html();
@@ -333,6 +339,32 @@ test('canceling the replacement name prompt leaves the current session intact', 
   assert.equal(browser.promptCount, 2);
   assert.equal(browser.userIdRequests, 1);
   assert.equal(browser.animationLoopStarts, 1);
+});
+
+test('a late user ID response from a same-name prior session cannot replace its successor', () => {
+  const browser = makeBrowserGame({
+    confirmations: [true],
+    prompts: ['Repeat player', 'Repeat player'],
+    deferUserIds: true,
+  });
+  const { game } = browser;
+  startInitialSession(browser);
+  game.newGame();
+  browser.flushTimeouts();
+
+  assert.equal(browser.userIdRequests, 2);
+  browser.completeUserIdRequest(1, 'replacement-id');
+  browser.completeUserIdRequest(0, 'original-id');
+
+  assert.equal(game.user.name, 'Repeat player');
+  assert.equal(game.user.id, 'replacement-id');
+  assert.equal(browser.animationLoopStarts, 1);
+
+  game.timer.elapsedTime = 10_000;
+  game.user.checkUpdateStats();
+  assert.equal(browser.statsPosts.length, 1);
+  assert.equal(browser.statsPosts[0].data.userId, 'replacement-id');
+  assert.equal(browser.statsPosts[0].data.name, 'Repeat player');
 });
 
 test('the final win creates one stable score form and keeps successful feedback across frames', () => {

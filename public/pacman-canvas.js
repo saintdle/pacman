@@ -178,13 +178,15 @@ function geronimo() {
         $('#kubernetes-usage-info').toggle(!!(hasCloud && hasZone));
     }
 
-    function ajaxGetUserId(name) {
+    function ajaxGetUserId(name, sessionGeneration) {
         $.ajax({
             datatype: "json",
             type: "GET",
             url: "user/id?name=" + encodeURIComponent(name || ''),
             success: function(msg){
-                game.user.id = msg;
+                if (game.user.sessionGeneration === sessionGeneration) {
+                    game.user.id = msg;
+                }
             }
         });
     }
@@ -222,7 +224,8 @@ function geronimo() {
     }
 
     function getUserId(name) {
-        setTimeout(function () { ajaxGetUserId(name); }, 30);
+        var sessionGeneration = game.user.sessionGeneration;
+        setTimeout(function () { ajaxGetUserId(name, sessionGeneration); }, 30);
     }
 
     function getCloudMetadata() {
@@ -573,10 +576,12 @@ function geronimo() {
     function User() {
         this.id = 0;
         this.name = '';
+        this.sessionGeneration = 0;
         this.sentUpdate = false;
         this.livestats = false;
 
         this.resetSession = function () {
+            this.sessionGeneration += 1;
             this.id = 0;
             this.name = '';
             this.sentUpdate = false;

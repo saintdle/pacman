@@ -44,6 +44,13 @@ function hasCounterSample(metricsText, name, labelFragments) {
     .some((line) => line.startsWith(`${name}{`) && labelFragments.every((fragment) => line.includes(fragment)));
 }
 
+function counterSampleValue(metricsText, name, labelFragments) {
+  const sample = metricsText
+    .split('\n')
+    .find((line) => line.startsWith(`${name}{`) && labelFragments.every((fragment) => line.includes(fragment)));
+  return sample ? Number(sample.trim().split(/\s+/).at(-1)) : 0;
+}
+
 describe('routeLabel survives Express error-unwinding for known demo probe routes', () => {
   test('file-probe keeps a fixed route label on both success and enforced failure', async () => {
     const app = buildProbeApp();
@@ -139,6 +146,7 @@ test('main API failures keep the route label through injection and error unwindi
     config.DEMO_SECURITY_MODE = true;
     config.DEMO_TOKEN = token;
 
+    const metricsBefore = renderMetrics();
     const healthy = await request(app).get('/highscores/list');
     const injected = await request(app)
       .get('/highscores/list')
@@ -147,31 +155,67 @@ test('main API failures keep the route label through injection and error unwindi
       .set('x-demo-fault-operation', 'scoreRead')
       .set('x-demo-fault-status', '503');
 
+    const healthyTrailingSlash = await request(app).get('/highscores/list/');
+    const caseVariantHealthy = await request(app).get('/Highscores/List/');
+    const headTrailingSlashHealthy = await request(app).head('/highscores/list/');
+    const injectedTrailingSlash = await request(app)
+      .get('/highscores/list/')
+      .set('x-demo-token', token)
+      .set('x-demo-fault-role', 'web')
+      .set('x-demo-fault-operation', 'pageView')
+      .set('x-demo-fault-status', '503');
+
     const originalListTopScores = db.listTopScores;
     db.listTopScores = async () => {
       throw new Error('simulated adapter failure');
     };
     const adapterFailure = await request(app).get('/highscores/list');
+    const trailingSlashFailure = await request(app).get('/highscores/list/');
+    const caseVariantFailure = await request(app).get('/Highscores/List/');
+    const headTrailingSlashFailure = await request(app).head('/highscores/list/');
+    const unknownExtraSlash = await request(app).get('/highscores/list///');
     db.listTopScores = originalListTopScores;
 
     const unknownPath = '/profiles/private-route-label-fixture';
     const unknown = await request(app).get(`${unknownPath}?token=private-fixture`);
     assert.equal(healthy.status, 200);
     assert.equal(injected.status, 503);
+    assert.equal(healthyTrailingSlash.status, 200);
+    assert.equal(caseVariantHealthy.status, 200);
+    assert.equal(headTrailingSlashHealthy.status, 200);
+    assert.equal(injectedTrailingSlash.status, 503);
     assert.equal(adapterFailure.status, 500);
+    assert.equal(trailingSlashFailure.status, 500);
+    assert.equal(caseVariantFailure.status, 500);
+    assert.equal(headTrailingSlashFailure.status, 500);
+    assert.equal(unknownExtraSlash.status, 404);
     assert.equal(unknown.status, 404);
 
     const metricsText = renderMetrics();
-    for (const status of ['200', '503', '500']) {
-      assert.ok(
-        hasCounterSample(metricsText, 'pacman_http_requests_total', [
-          'method="GET"',
-          'route="/highscores/list"',
-          `status="${status}"`,
-        ]),
-        `expected GET /highscores/list status ${status} to keep its bounded route label:\n${metricsText}`,
+    const requestMetric = 'pacman_http_requests_total';
+    for (const [method, status, expectedDelta] of [
+      ['GET', '200', 3],
+      ['GET', '503', 2],
+      ['GET', '500', 3],
+      ['HEAD', '200', 1],
+      ['HEAD', '500', 1],
+    ]) {
+      const labels = [`method="${method}"`, 'route="/highscores/list"', `status="${status}"`];
+      assert.equal(
+        counterSampleValue(metricsText, requestMetric, labels) - counterSampleValue(metricsBefore, requestMetric, labels),
+        expectedDelta,
+        `expected ${expectedDelta} ${method} /highscores/list ${status} samples across accepted route forms:\n${metricsText}`,
       );
     }
+    for (const [method, status, expectedDelta] of [['GET', '404', 2], ['GET', '503', 0], ['GET', '500', 0]]) {
+      const labels = [`method="${method}"`, 'route="unknown"', `status="${status}"`];
+      assert.equal(
+        counterSampleValue(metricsText, requestMetric, labels) - counterSampleValue(metricsBefore, requestMetric, labels),
+        expectedDelta,
+        `unexpected unknown-route samples for ${method} status ${status}:\n${metricsText}`,
+      );
+    }
+    assert.ok(!metricsText.includes('/highscores/list///'), 'a non-matching repeated slash must not be normalized into a route');
     assert.ok(
       hasCounterSample(metricsText, 'pacman_http_requests_total', [
         'method="GET"',

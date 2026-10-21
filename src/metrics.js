@@ -107,16 +107,25 @@ const KNOWN_ROUTES = new Map([
   ['GET /location/metadata', '/location/metadata'],
 ]);
 
+function knownRouteLabel(method, path) {
+  // Mirror Express's case-insensitive, non-strict routes and GET-to-HEAD behavior,
+  // while keeping this fixed allowlist as the only source of metric identities.
+  const routeMethod = method === 'HEAD' ? 'GET' : method;
+  const routePath = path.toLowerCase().replace(/\/$/, '');
+  return KNOWN_ROUTES.get(`${routeMethod} ${routePath}`);
+}
+
 export function routeLabel(req) {
   const path = (req.originalUrl || req.path || '/').split('?')[0];
   if (path === '/metrics') return '/metrics';
   if (path === '/healthz' || path.startsWith('/readyz')) return 'health';
 
   if (req.baseUrl && req.route?.path) {
-    return `${req.baseUrl}${req.route.path === '/' ? '' : req.route.path}`;
+    const matchedPath = `${req.baseUrl}${req.route.path === '/' ? '' : req.route.path}`;
+    return knownRouteLabel(req.method, matchedPath) || matchedPath;
   }
 
-  const known = KNOWN_ROUTES.get(`${req.method} ${path}`);
+  const known = knownRouteLabel(req.method, path);
   if (known && (!req.baseUrl || !req.route)) return known;
 
   if (
