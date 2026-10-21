@@ -52,12 +52,80 @@ describe('demo metadata and incident routes', () => {
     assert.equal(res.body.incident.action, 'observe');
   });
 
-  test('demo fault middleware injects a gated HTTP error', async () => {
+  test('demo fault middleware injects a gated HTTP error for the matching role and operation', async () => {
     const res = await request(app)
       .get('/version')
       .set('x-demo-token', 'secret-demo')
+      .set('x-demo-fault-role', 'web')
+      .set('x-demo-fault-operation', 'pageView')
       .set('x-demo-fault-status', '503');
     assert.equal(res.status, 503);
     assert.equal(res.body.error, 'demo fault injected');
+  });
+
+  test('demo fault middleware ignores a fault addressed to a different role', async () => {
+    const res = await request(app)
+      .get('/version')
+      .set('x-demo-token', 'secret-demo')
+      .set('x-demo-fault-role', 'score')
+      .set('x-demo-fault-operation', 'pageView')
+      .set('x-demo-fault-status', '503');
+    assert.equal(res.status, 200);
+  });
+
+  test('demo fault middleware ignores an out-of-range status', async () => {
+    const res = await request(app)
+      .get('/version')
+      .set('x-demo-token', 'secret-demo')
+      .set('x-demo-fault-role', 'web')
+      .set('x-demo-fault-operation', 'pageView')
+      .set('x-demo-fault-status', '418');
+    assert.equal(res.status, 200);
+  });
+
+  test('demo fault middleware is exempt on /metrics', async () => {
+    const res = await request(app)
+      .get('/metrics')
+      .set('x-demo-token', 'secret-demo')
+      .set('x-demo-fault-role', 'web')
+      .set('x-demo-fault-operation', 'pageView')
+      .set('x-demo-fault-status', '503');
+    assert.equal(res.status, 200);
+  });
+
+  test('POST /demo/incidents/file-probe is disabled by default', async () => {
+    const res = await request(app).post('/demo/incidents/file-probe').set('x-demo-token', 'secret-demo');
+    assert.equal(res.status, 404);
+  });
+
+  test('POST /demo/incidents/exec-probe is disabled by default', async () => {
+    const res = await request(app).post('/demo/incidents/exec-probe').set('x-demo-token', 'secret-demo');
+    assert.equal(res.status, 404);
+  });
+
+  test('repeated demo authorization attempts are rate-limited before route work', async () => {
+    const agent = request.agent(app);
+    let lastResponse;
+    for (let i = 0; i < 31; i += 1) {
+      lastResponse = await agent.post('/demo/incidents').send({ type: 'test' });
+    }
+    assert.equal(lastResponse.status, 429);
+  });
+
+  test('demo fault injection rate-limits requests carrying fault controls only', async () => {
+    const agent = request.agent(app);
+    let lastResponse;
+    for (let i = 0; i < 31; i += 1) {
+      lastResponse = await agent
+        .get('/version')
+        .set('x-demo-token', 'secret-demo')
+        .set('x-demo-fault-role', 'web')
+        .set('x-demo-fault-operation', 'pageView')
+        .set('x-demo-fault-status', '503');
+    }
+    assert.equal(lastResponse.status, 429);
+
+    const ordinaryRequest = await agent.get('/version');
+    assert.equal(ordinaryRequest.status, 200);
   });
 });

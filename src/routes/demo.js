@@ -1,14 +1,43 @@
 import { Router } from 'express';
 import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { rateLimit } from 'express-rate-limit';
 import { config } from '../config/index.js';
 import { requireDemoAccess } from '../demo/guard.js';
 
 const execFileAsync = promisify(execFile);
 
+const here = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(here, '../..');
+
+// Fixed, non-caller-controlled paths. In the distroless runtime image these
+// resolve under /app; falling back to the repo-relative path lets the same
+// code run unmodified in host-local tests/dev.
+const APP_FIXTURE_PATH = '/app/demo-fixtures/synthetic-secret.txt';
+const FIXTURE_PATH = existsSync(APP_FIXTURE_PATH) ? APP_FIXTURE_PATH : path.join(repoRoot, 'demo-fixtures/synthetic-secret.txt');
+
+const APP_HELPER_PATH = '/app/tools/demo-exec-probe.js';
+const HELPER_PATH = existsSync(APP_HELPER_PATH) ? APP_HELPER_PATH : path.join(repoRoot, 'tools/demo-exec-probe.js');
+
+// The distroless image's Node binary is the exec target pinned by the fixed
+// helper's shebang; Tetragon scopes enforcement to sys_execve arg0 matching
+// HELPER_PATH exactly, so no caller-selected command/args are ever passed.
+const DISTROLESS_NODE_BIN = '/nodejs/bin/node';
+
 export function demoRouter() {
   const router = Router();
+
+  router.use(rateLimit({
+    windowMs: 60_000,
+    limit: 30,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+    message: { error: 'too many demo requests' },
+  }));
 
   router.get('/status', (req, res) => {
     res.json({
@@ -18,6 +47,8 @@ export function demoRouter() {
       role: config.APP_ROLE,
       version: config.APP_VERSION,
       variant: config.APP_VARIANT,
+      fileProbeEnabled: config.DEMO_FILE_PROBE_ENABLED,
+      execProbeEnabled: config.DEMO_EXEC_PROBE_ENABLED,
     });
   });
 
@@ -40,11 +71,12 @@ export function demoRouter() {
 
   router.post('/incidents/file-probe', async (req, res, next) => {
     if (!requireDemoAccess(req, res)) return;
+    if (!config.DEMO_FILE_PROBE_ENABLED) return res.status(404).json({ error: 'demo file probe is disabled' });
 
     try {
-      const hostname = (await readFile('/etc/hostname', 'utf8')).trim();
-      req.log?.warn({ probe: 'file', path: '/etc/hostname', hostname }, 'demo incident file probe');
-      res.json({ rs: 'success', probe: 'file', path: '/etc/hostname', hostname });
+      const content = (await readFile(FIXTURE_PATH, 'utf8')).trim();
+      req.log?.warn({ probe: 'file', path: FIXTURE_PATH }, 'demo incident file probe');
+      res.json({ rs: 'success', probe: 'file', path: FIXTURE_PATH, content });
     } catch (err) {
       next(err);
     }
@@ -52,13 +84,14 @@ export function demoRouter() {
 
   router.post('/incidents/exec-probe', async (req, res, next) => {
     if (!requireDemoAccess(req, res)) return;
+    if (!config.DEMO_EXEC_PROBE_ENABLED) return res.status(404).json({ error: 'demo exec probe is disabled' });
 
     try {
-      const { stdout } = await execFileAsync(process.execPath, ['-e', 'process.stdout.write("demo-exec-probe")'], {
-        timeout: 1000,
-      });
-      req.log?.warn({ probe: 'exec', binary: process.execPath }, 'demo incident exec probe');
-      res.json({ rs: 'success', probe: 'exec', output: stdout });
+      const { stdout } = existsSync(DISTROLESS_NODE_BIN)
+        ? await execFileAsync(HELPER_PATH, [], { timeout: 1000 })
+        : await execFileAsync(process.execPath, [HELPER_PATH], { timeout: 1000 });
+      req.log?.warn({ probe: 'exec', binary: HELPER_PATH }, 'demo incident exec probe');
+      res.json({ rs: 'success', probe: 'exec', output: stdout.trim() });
     } catch (err) {
       next(err);
     }

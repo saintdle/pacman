@@ -1,34 +1,39 @@
-# Values fragment for the published Pac-Man Helm chart.
+# Values fragment for the matching candidate Pac-Man chart and app image.
+# The chart and app image must come from the same candidate build.
+# Published defaults remain pinned to the released build.
 # This file is not a Kubernetes manifest. Do not apply it with kubectl.
 # Chart source: https://github.com/saintdle/helm-charts/tree/main/charts/pacman
 # Repository: https://saintdle.github.io/helm-charts
 #
 # Example:
-#   helm upgrade --install pacman saintdle/pacman \
-#     --namespace pacman-demo --create-namespace \
+#   helm upgrade --install pacman <candidate-chart-path> \
+#     --namespace pacman-demo \
+#     --set-string image.repository=<candidate-image-repository> \
+#     --set-string image.tag=<candidate-image-tag> \
 #     --values k8s/examples/helm-values.yaml
+# Replace the chart and image values with artifacts from the same candidate.
+# Create the referenced Secret before installing; see k8s/examples/README.md.
 
 database: mongo
 
 extraEnv:
   - name: MAX_LEVEL
-    value: "10"
+    value: '10'
   - name: ALLOW_CLIENT_CONFIG_OVERRIDE
-    value: "false"
+    value: 'false'
   - name: EBEE_MODE
-    value: "true"
+    value: 'true'
   - name: ALLOW_CLIENT_EBEE_MODE_OVERRIDE
-    value: "false"
+    value: 'false'
   - name: APP_VARIANT
     value: stable
   - name: APP_COLOR
-    value: "#ffcc00"
-  - name: DEMO_SECURITY_MODE
-    value: "true"
-  - name: DEMO_TOKEN_HEADER
-    value: x-demo-token
-  - name: DEMO_TOKEN
-    value: pacman-demo
+    value: '#ffcc00'
+
+demo:
+  enabled: true
+  existingTokenSecret: pacman-demo-token
+  tokenHeader: x-demo-token
 
 service:
   type: LoadBalancer

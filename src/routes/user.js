@@ -79,7 +79,7 @@ export function userRouter() {
       res.json({ rs: 'success' });
     } catch (err) {
       req.log?.error({ err }, 'failed to update user stats');
-      res.json({ rs: 'error' });
+      res.status(err.status ?? 500).json({ rs: 'error' });
       next(err);
     }
   });

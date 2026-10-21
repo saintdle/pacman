@@ -18,9 +18,31 @@ installations, database configuration, persistence, ingress, OpenShift
 support, and production-style defaults.
 
 The files [`helm-values.yaml`](helm-values.yaml) and
-[`values-openshift.yaml`](values-openshift.yaml) are values fragments for that
-external chart. They are not Kubernetes manifests and must not be passed to
-`kubectl apply`. For the complete, versioned values schema, use:
+[`values-openshift.yaml`](values-openshift.yaml) are Helm values fragments,
+which you pass to Helm with `--values`. The OpenShift fragment targets the
+published chart. The demo fragment uses typed `demo` values from the matching
+candidate chart and app image. Published chart and pinned image defaults remain
+unchanged. Set `image.repository` and `image.tag` to the app image from that
+candidate build.
+
+The demo values reference an existing `pacman-demo-token` Secret with a `token`
+key in the release namespace. Before you install the candidate chart, create
+the namespace and Secret:
+
+```bash
+kubectl create namespace pacman-demo --dry-run=client -o yaml | kubectl apply -f -
+read -r -s -p 'Demo token: ' DEMO_TOKEN
+printf '\n'
+printf '%s' "$DEMO_TOKEN" | kubectl create secret generic pacman-demo-token \
+  --namespace pacman-demo --from-file=token=/dev/stdin
+unset DEMO_TOKEN
+```
+
+Set `demo.existingTokenSecret` to the Secret name. The candidate chart resolves
+`DEMO_TOKEN` from its `token` key through a rendered `secretKeyRef`. Keep the
+token value in the Secret.
+
+For the published chart's complete, versioned values schema, use:
 
 ```sh
 helm repo add saintdle https://saintdle.github.io/helm-charts

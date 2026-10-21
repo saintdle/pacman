@@ -459,6 +459,65 @@ test('metrics use stable labels for internal API paths', async () => {
   assert.match(res.text, /route="\/internal\/user\/session"/);
 });
 
+test('demo fault counter does not duplicate the role label', async () => {
+  const previous = { DEMO_SECURITY_MODE: config.DEMO_SECURITY_MODE, DEMO_TOKEN: config.DEMO_TOKEN };
+  config.DEMO_SECURITY_MODE = true;
+  config.DEMO_TOKEN = 'routes-test-token';
+  try {
+    const res = await request(app)
+      .get('/highscores/list')
+      .set('x-demo-token', config.DEMO_TOKEN)
+      .set('x-demo-fault-role', 'web')
+      .set('x-demo-fault-operation', 'scoreRead')
+      .set('x-demo-fault-status', '503');
+    assert.equal(res.status, 503);
+
+    const metrics = await request(app).get('/metrics');
+    const line = metrics.text.split('\n').find((l) => l.startsWith('pacman_demo_faults_total'));
+    assert.ok(line, 'expected a pacman_demo_faults_total sample');
+    const labelSection = line.slice(line.indexOf('{') + 1, line.indexOf('}'));
+    const roleLabels = labelSection.split(',').filter((pair) => pair.startsWith('role='));
+    assert.equal(roleLabels.length, 1, `expected exactly one role label in: ${line}`);
+  } finally {
+    Object.assign(config, previous);
+  }
+});
+
+test('POST /highscores returns a real 5xx (not a disguised 200) when the database write fails', async () => {
+  const original = db.insertScore;
+  db.insertScore = async () => {
+    throw new Error('simulated database write failure');
+  };
+  try {
+    const res = await request(app)
+      .post('/highscores')
+      .type('form')
+      .send({ name: 'DbFail', cloud: 'local', zone: 'lab', host: 'devbox', score: '100', level: '1' });
+    assert.ok(res.status >= 500 && res.status <= 599, `expected a 5xx status, got ${res.status}`);
+    assert.equal(res.body.rs, 'error');
+  } finally {
+    db.insertScore = original;
+  }
+});
+
+test('POST /user/stats returns a real 5xx (not a disguised 200) when the database write fails', async () => {
+  const { id: userId } = await db.createUser('DbFailUser');
+  const original = db.updateUserStats;
+  db.updateUserStats = async () => {
+    throw new Error('simulated database write failure');
+  };
+  try {
+    const res = await request(app)
+      .post('/user/stats')
+      .type('form')
+      .send({ userId, score: '100', level: '1', lives: '3', elapsedTime: '10' });
+    assert.ok(res.status >= 500 && res.status <= 599, `expected a 5xx status, got ${res.status}`);
+    assert.equal(res.body.rs, 'error');
+  } finally {
+    db.updateUserStats = original;
+  }
+});
+
 test('unknown route returns 500-or-better with our error template', async () => {
   const res = await request(app).get('/this-route-does-not-exist');
   assert.equal(res.status, 404);

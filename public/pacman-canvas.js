@@ -178,13 +178,15 @@ function geronimo() {
         $('#kubernetes-usage-info').toggle(!!(hasCloud && hasZone));
     }
 
-    function ajaxGetUserId(name) {
+    function ajaxGetUserId(name, sessionGeneration) {
         $.ajax({
             datatype: "json",
             type: "GET",
             url: "user/id?name=" + encodeURIComponent(name || ''),
             success: function(msg){
-                game.user.id = msg;
+                if (game.user.sessionGeneration === sessionGeneration) {
+                    game.user.id = msg;
+                }
             }
         });
     }
@@ -222,7 +224,8 @@ function geronimo() {
     }
 
     function getUserId(name) {
-        setTimeout(function () { ajaxGetUserId(name); }, 30);
+        var sessionGeneration = game.user.sessionGeneration;
+        setTimeout(function () { ajaxGetUserId(name, sessionGeneration); }, 30);
     }
 
     function getCloudMetadata() {
@@ -573,10 +576,12 @@ function geronimo() {
     function User() {
         this.id = 0;
         this.name = '';
+        this.sessionGeneration = 0;
         this.sentUpdate = false;
         this.livestats = false;
 
         this.resetSession = function () {
+            this.sessionGeneration += 1;
             this.id = 0;
             this.name = '';
             this.sentUpdate = false;
@@ -733,14 +738,34 @@ function geronimo() {
         this.reset = function() {
             };
 
+        this.startSession = function(name) {
+            var playerName = name === undefined ? this.user.name : name;
+            if (!playerName) playerName = window.prompt('Enter your name to start the game:');
+            if (playerName === null || !playerName.trim()) return false;
+
+            this.user.name = playerName.trim().slice(0, 32);
+            getUserId(this.user.name);
+            this.timer.start();
+            this.pause = false;
+            this.closeMessage();
+            if (!this.running) {
+                this.running = true;
+                animationLoop();
+            }
+            return true;
+        };
+
         this.newGame = function() {
             var r = confirm("Are you sure you want to restart?");
-            if (r) {
-                console.log("new Game");
-                this.user.resetSession();
-                this.init(0);
-                this.pauseResume();
-            }
+            if (!r) return;
+
+            var name = window.prompt('Enter your name to start the game:');
+            if (name === null || !name.trim()) return;
+
+            console.log("new Game");
+            this.user.resetSession();
+            this.init(0);
+            this.startSession(name);
         };
 
         this.restartLevel = function() {
@@ -893,18 +918,7 @@ function geronimo() {
 
         this.pauseResume = function () {
             if (!this.running) {
-                if (!this.user.name) {
-                    var name = window.prompt('Enter your name to start the game:');
-                    if (name === null || !name.trim()) return;
-                    this.user.name = name.trim().slice(0, 32);
-                }
-                getUserId(this.user.name);
-                // start timer
-                this.timer.start();
-                this.pause = false;
-                this.running = true;
-                this.closeMessage();
-                animationLoop();
+                this.startSession();
             }
             else if (this.pause) {
                 // resume timer
@@ -992,7 +1006,7 @@ function geronimo() {
         };
 
         this.check = function() {
-        if ((this.pillCount === 0) && game.running) {
+        if ((this.pillCount === 0) && game.running && !this.gameOver) {
                 this.nextLevel();
             }
         };
@@ -2165,7 +2179,6 @@ function checkAppCache() {
                 break;
             case 78:    // N pressed
             if (!$('#playerName').is(':focus')) {
-                game.pause = 1;
                 game.newGame();
                 }
                 break;
