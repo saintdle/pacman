@@ -53,7 +53,7 @@ before(async () => {
   if (!enabled) return;
   const { MongoDBContainer } = await import('@testcontainers/mongodb');
   container = await new MongoDBContainer('mongo:8')
-    .withWaitStrategy(Wait.forLogMessage(/Waiting for connections/))
+    .withWaitStrategy(Wait.forListeningPorts())
     .start();
   await waitForPrimary(container.getConnectionString());
   adapter = new MongoAdapter(
