@@ -6,11 +6,39 @@ on:
     paths:
       - "k8s/**"
       - "docker/Dockerfile"
+      - "src/**"
+      - "public/**"
+      - "views/**"
+      - "proto/**"
+      - "package.json"
+      - "package-lock.json"
+      - "demo-fixtures/synthetic-secret.txt"
+      - "tools/healthcheck.js"
+      - "tools/demo-exec-probe.js"
+      - "tools/check-container-image-contract.js"
+      - "tools/smoke-container-images.js"
+      - "tools/check-kubernetes-image-identity.js"
+      - "test/container-image-contract.test.js"
+      - "test/container-image-identity.test.js"
       - ".github/workflows/k8s-examples.yml"
   pull_request:
     paths:
       - "k8s/**"
       - "docker/Dockerfile"
+      - "src/**"
+      - "public/**"
+      - "views/**"
+      - "proto/**"
+      - "package.json"
+      - "package-lock.json"
+      - "demo-fixtures/synthetic-secret.txt"
+      - "tools/healthcheck.js"
+      - "tools/demo-exec-probe.js"
+      - "tools/check-container-image-contract.js"
+      - "tools/smoke-container-images.js"
+      - "tools/check-kubernetes-image-identity.js"
+      - "test/container-image-contract.test.js"
+      - "test/container-image-identity.test.js"
       - ".github/workflows/k8s-examples.yml"
   workflow_dispatch:
 
@@ -28,6 +56,47 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Freeze checked-out source identity
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
+        run: |
+          set -euo pipefail
+          checkout_sha=$(git rev-parse HEAD)
+          if [[ "$checkout_sha" != "$GITHUB_SHA" ]]; then
+            echo "Checked-out source $checkout_sha does not match event source $GITHUB_SHA." >&2
+            exit 1
+          fi
+          image_tag="docker.io/library/pacman:ci-${checkout_sha}"
+          {
+            echo "PACMAN_CHECKOUT_SHA=$checkout_sha"
+            echo "PACMAN_IMAGE=$image_tag"
+          } >> "$GITHUB_ENV"
+          printf 'Checked-out source: %s\n' "$checkout_sha"
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            printf 'Pull request head: %s\nSynthetic merge checkout: %s\n' "$PR_HEAD_SHA" "$checkout_sha"
+          fi
+
+      - name: Build and smoke-test the exact candidate image
+        run: |
+          set -euo pipefail
+          docker build \
+            --platform linux/amd64 \
+            --file docker/Dockerfile \
+            --build-arg COMMIT_SHA="$PACMAN_CHECKOUT_SHA" \
+            --tag "$PACMAN_IMAGE" \
+            .
+          image_revision=$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$PACMAN_IMAGE")
+          image_id=$(docker image inspect --format '{{.Id}}' "$PACMAN_IMAGE")
+          if [[ "$image_revision" != "$PACMAN_CHECKOUT_SHA" ]]; then
+            echo "Built image revision $image_revision does not match checked-out source $PACMAN_CHECKOUT_SHA." >&2
+            exit 1
+          fi
+          printf 'PACMAN_IMAGE_ID=%s\n' "$image_id" >> "$GITHUB_ENV"
+          printf 'Candidate image: %s\nSource: %s\nImage ID: %s\n' "$PACMAN_IMAGE" "$image_revision" "$image_id"
+          node tools/smoke-container-images.js \
+            --expected-revision "$PACMAN_CHECKOUT_SHA" \
+            "linux/amd64=$PACMAN_IMAGE"
 
       - name: Install Kind with checksum retries
         env:
@@ -57,6 +126,7 @@ jobs:
               ); then
               install -m 0755 "$temp_dir/kind-linux-${kind_arch}" "$kind_dir/kind"
               rm -rf "$temp_dir"
+              echo "$kind_dir" >> "$GITHUB_PATH"
               exit 0
             fi
 
@@ -70,11 +140,23 @@ jobs:
           echo "Unable to install Kind ${KIND_VERSION} after five checksum-verified attempts." >&2
           exit 1
 
-      - name: Create Kind cluster
-        uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
-        with:
-          version: v0.30.0
-          node_image: kindest/node:v1.31.4
+      - name: Create owned Kind cluster and kubeconfig
+        run: |
+          set -euo pipefail
+          cluster_name="pacman-k8s-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          namespace="pacman-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          kubeconfig="${RUNNER_TEMP}/${cluster_name}.kubeconfig"
+          {
+            echo "PACMAN_CLUSTER_NAME=$cluster_name"
+            echo "PACMAN_NAMESPACE=$namespace"
+            echo "PACMAN_KUBECONFIG=$kubeconfig"
+          } >> "$GITHUB_ENV"
+          kind create cluster \
+            --name "$cluster_name" \
+            --image kindest/node:v1.31.4 \
+            --wait 120s \
+            --kubeconfig "$kubeconfig"
+          kind load docker-image "$PACMAN_IMAGE" --name "$cluster_name"
 
       - name: Install kubeconform
         run: |
@@ -86,21 +168,92 @@ jobs:
       - name: Install local storage provisioner
         run: |
           set -euo pipefail
-          kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.31/deploy/local-path-storage.yaml
-          kubectl patch storageclass local-path \
+          kubectl --kubeconfig "$PACMAN_KUBECONFIG" apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.31/deploy/local-path-storage.yaml
+          kubectl --kubeconfig "$PACMAN_KUBECONFIG" patch storageclass local-path \
             -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
-          kubectl wait --for=condition=available deployment/local-path-provisioner \
+          kubectl --kubeconfig "$PACMAN_KUBECONFIG" wait --for=condition=available deployment/local-path-provisioner \
             -n local-path-storage --timeout=120s
 
-      - name: Validate core and optional manifests
+      - name: Render isolated candidate overlays and validate manifests
         run: |
           set -euo pipefail
-          kubectl kustomize k8s/examples > /tmp/pacman-kustomize.yaml
-          # Server-side dry-run does not persist a Namespace before validating
-          # resources that reference it, so create the disposable namespace first.
-          kubectl create namespace pacman-demo --dry-run=client -o yaml | kubectl apply -f -
-          kubectl apply --dry-run=server -f /tmp/pacman-kustomize.yaml
-          kubectl apply --dry-run=server -f k8s/examples/postgres-example.yaml
+          overlay_root="${RUNNER_TEMP}/pacman-k8s-overlays"
+          multi_dir="${overlay_root}/multi-role"
+          postgres_dir="${overlay_root}/postgres"
+          mkdir -p "$multi_dir" "$postgres_dir" "$overlay_root/base"
+          cp -R "$GITHUB_WORKSPACE/k8s/examples" "$overlay_root/base/examples"
+
+          cat > "$multi_dir/kustomization.yaml" <<EOF
+          apiVersion: kustomize.config.k8s.io/v1beta1
+          kind: Kustomization
+          namespace: ${PACMAN_NAMESPACE}
+          resources:
+            - ../base/examples
+          images:
+            - name: docker.io/saintdle/pacman
+              newName: docker.io/library/pacman
+              newTag: ci-${PACMAN_CHECKOUT_SHA}
+          patches:
+            - target:
+                version: v1
+                kind: Namespace
+                name: pacman-demo
+              patch: |-
+                apiVersion: v1
+                kind: Namespace
+                metadata:
+                  name: ${PACMAN_NAMESPACE}
+            - target:
+                group: apps
+                version: v1
+                kind: Deployment
+                name: pacman-web
+              patch: |-
+                apiVersion: apps/v1
+                kind: Deployment
+                metadata:
+                  name: pacman-web
+                spec:
+                  template:
+                    spec:
+                      containers:
+                        - name: pacman
+                          env:
+                            - name: SCORE_SERVICE_URL
+                              value: http://pacman-score.${PACMAN_NAMESPACE}.svc:8080
+                            - name: USER_SERVICE_URL
+                              value: http://pacman-user.${PACMAN_NAMESPACE}.svc:8080
+          EOF
+
+          cat > "$postgres_dir/kustomization.yaml" <<EOF
+          apiVersion: kustomize.config.k8s.io/v1beta1
+          kind: Kustomization
+          namespace: ${PACMAN_NAMESPACE}
+          resources:
+            - ../base/examples/postgres-example.yaml
+          images:
+            - name: docker.io/saintdle/pacman
+              newName: docker.io/library/pacman
+              newTag: ci-${PACMAN_CHECKOUT_SHA}
+          patches:
+            - target:
+                version: v1
+                kind: Namespace
+                name: pacman-demo
+              patch: |-
+                apiVersion: v1
+                kind: Namespace
+                metadata:
+                  name: ${PACMAN_NAMESPACE}
+          EOF
+
+          multi_manifest="${RUNNER_TEMP}/pacman-multi-role.yaml"
+          postgres_manifest="${RUNNER_TEMP}/pacman-postgres.yaml"
+          kubectl kustomize --load-restrictor=LoadRestrictionsNone "$multi_dir" > "$multi_manifest"
+          kubectl kustomize --load-restrictor=LoadRestrictionsNone "$postgres_dir" > "$postgres_manifest"
+          kubectl --kubeconfig "$PACMAN_KUBECONFIG" create namespace "$PACMAN_NAMESPACE"
+          kubectl --kubeconfig "$PACMAN_KUBECONFIG" apply --dry-run=server -f "$multi_manifest"
+          kubectl --kubeconfig "$PACMAN_KUBECONFIG" apply --dry-run=server -f "$postgres_manifest"
 
           # Optional policy and observability examples need their controller
           # CRDs, so validate their Kubernetes shape without applying them to
@@ -119,32 +272,61 @@ jobs:
       - name: Apply and smoke-test the generic multi-role example
         run: |
           set -euo pipefail
-          kubectl apply -k k8s/examples
+          kubectl --kubeconfig "$PACMAN_KUBECONFIG" apply -f "${RUNNER_TEMP}/pacman-multi-role.yaml"
           for deployment in pacman-web pacman-score pacman-user; do
-            kubectl -n pacman-demo rollout status "deployment/$deployment" --timeout=180s
+            kubectl --kubeconfig "$PACMAN_KUBECONFIG" -n "$PACMAN_NAMESPACE" rollout status "deployment/$deployment" --timeout=180s
           done
-          kubectl -n pacman-demo port-forward svc/pacman-web 18080:8080 > /tmp/pacman-web-port-forward.log 2>&1 &
-          port_forward_pid=$!
-          trap 'kill "$port_forward_pid" 2>/dev/null || true' EXIT
-          curl --fail --retry 15 --retry-all-errors --retry-delay 1 http://127.0.0.1:18080/healthz
-          curl --fail --retry 15 --retry-all-errors --retry-delay 1 http://127.0.0.1:18080/readyz
+          for identity in 'web:app=pacman,role=web' 'score:app=pacman,role=score' 'user:app=pacman,role=user'; do
+            role="${identity%%:*}"
+            selector="${identity#*:}"
+            node tools/check-kubernetes-image-identity.js role \
+              --kubeconfig "$PACMAN_KUBECONFIG" \
+              --namespace "$PACMAN_NAMESPACE" \
+              --selector "$selector" \
+              --role "$role" \
+              --image "$PACMAN_IMAGE" \
+              --image-id "$PACMAN_IMAGE_ID" \
+              --revision "$PACMAN_CHECKOUT_SHA"
+          done
 
       - name: Apply and smoke-test the PostgreSQL example
         run: |
           set -euo pipefail
-          kubectl apply -f k8s/examples/postgres-example.yaml
-          kubectl -n pacman-demo rollout status deployment/postgres --timeout=180s
-          kubectl -n pacman-demo wait --for=condition=complete job/pacman-postgres-migrate --timeout=180s
-          kubectl -n pacman-demo rollout status deployment/pacman-postgres --timeout=180s
-          kubectl -n pacman-demo port-forward svc/pacman-postgres 18081:8080 > /tmp/pacman-postgres-port-forward.log 2>&1 &
-          port_forward_pid=$!
-          trap 'kill "$port_forward_pid" 2>/dev/null || true' EXIT
-          curl --fail --retry 15 --retry-all-errors --retry-delay 1 http://127.0.0.1:18081/healthz
-          curl --fail --retry 15 --retry-all-errors --retry-delay 1 http://127.0.0.1:18081/readyz
+          kubectl --kubeconfig "$PACMAN_KUBECONFIG" apply -f "${RUNNER_TEMP}/pacman-postgres.yaml"
+          kubectl --kubeconfig "$PACMAN_KUBECONFIG" -n "$PACMAN_NAMESPACE" rollout status deployment/postgres --timeout=180s
+          kubectl --kubeconfig "$PACMAN_KUBECONFIG" -n "$PACMAN_NAMESPACE" wait --for=condition=complete job/pacman-postgres-migrate --timeout=180s
+          kubectl --kubeconfig "$PACMAN_KUBECONFIG" -n "$PACMAN_NAMESPACE" rollout status deployment/pacman-postgres --timeout=180s
+          node tools/check-kubernetes-image-identity.js role \
+            --kubeconfig "$PACMAN_KUBECONFIG" \
+            --namespace "$PACMAN_NAMESPACE" \
+            --selector 'app=pacman,backend=postgres' \
+            --role web \
+            --image "$PACMAN_IMAGE" \
+            --image-id "$PACMAN_IMAGE_ID" \
+            --revision "$PACMAN_CHECKOUT_SHA"
+          node tools/check-kubernetes-image-identity.js migration \
+            --kubeconfig "$PACMAN_KUBECONFIG" \
+            --namespace "$PACMAN_NAMESPACE" \
+            --job pacman-postgres-migrate \
+            --image "$PACMAN_IMAGE" \
+            --image-id "$PACMAN_IMAGE_ID"
 
       - name: Collect cluster diagnostics
         if: failure()
         run: |
-          kubectl -n pacman-demo get pods,deployments,jobs,events --sort-by=.lastTimestamp || true
-          kubectl -n pacman-demo describe pods || true
-          cat /tmp/pacman-web-port-forward.log /tmp/pacman-postgres-port-forward.log 2>/dev/null || true
+          if [[ -n "${PACMAN_KUBECONFIG:-}" && -n "${PACMAN_NAMESPACE:-}" ]]; then
+            kubectl --kubeconfig "$PACMAN_KUBECONFIG" -n "$PACMAN_NAMESPACE" get pods,deployments,jobs,events --sort-by=.lastTimestamp || true
+            kubectl --kubeconfig "$PACMAN_KUBECONFIG" -n "$PACMAN_NAMESPACE" describe pods || true
+          fi
+
+      - name: Delete owned Kind cluster and kubeconfig
+        if: always()
+        run: |
+          set -euo pipefail
+          if [[ -n "${PACMAN_CLUSTER_NAME:-}" && -n "${PACMAN_KUBECONFIG:-}" ]]; then
+            kind delete cluster --name "$PACMAN_CLUSTER_NAME" --kubeconfig "$PACMAN_KUBECONFIG" || true
+            python3 -c 'from pathlib import Path; import sys; Path(sys.argv[1]).unlink(missing_ok=True)' "$PACMAN_KUBECONFIG"
+          fi
+          if [[ -n "${RUNNER_TEMP:-}" ]]; then
+            python3 -c 'from pathlib import Path; import shutil, sys; path = Path(sys.argv[1]); shutil.rmtree(path, ignore_errors=True); [(path.parent / name).unlink(missing_ok=True) for name in ("pacman-multi-role.yaml", "pacman-postgres.yaml")]' "$RUNNER_TEMP/pacman-k8s-overlays"
+          fi
