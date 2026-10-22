@@ -1,14 +1,18 @@
 import { test, before, after, skip } from 'node:test';
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { MongoClient } from 'mongodb';
 import { Wait } from 'testcontainers';
 import { MongoAdapter } from '../../src/db/mongo.js';
+import { appendMongoStartupOutput, captureMongoStartupFailure } from './mongo-fixture-diagnostics.js';
 
 const enabled = process.env.RUN_ADAPTER_TESTS === '1';
 
 let adapter;
 let container;
+let containerName;
+let startupOutput = '';
 
 async function waitForPrimary(connectionString) {
   const client = new MongoClient(connectionString, {
@@ -51,16 +55,33 @@ async function waitForPrimary(connectionString) {
 
 before(async () => {
   if (!enabled) return;
-  const { MongoDBContainer } = await import('@testcontainers/mongodb');
-  container = await new MongoDBContainer('mongo:8')
-    .withWaitStrategy(Wait.forListeningPorts())
-    .start();
-  await waitForPrimary(container.getConnectionString());
-  adapter = new MongoAdapter(
-    { MONGO_DATABASE: 'pacman' },
-    { url: container.getConnectionString(), options: { directConnection: true } },
-  );
-  await adapter.connect();
+  containerName = `pacman-mongo-adapter-${process.pid}-${randomUUID()}`;
+  try {
+    const { MongoDBContainer } = await import('@testcontainers/mongodb');
+    container = await new MongoDBContainer('mongo:8')
+      .withName(containerName)
+      .withLogConsumer((stream) => {
+        stream.on('data', (chunk) => {
+          startupOutput = appendMongoStartupOutput(startupOutput, chunk);
+        });
+      })
+      .withWaitStrategy(Wait.forListeningPorts())
+      .start();
+    await waitForPrimary(container.getConnectionString());
+    adapter = new MongoAdapter(
+      { MONGO_DATABASE: 'pacman' },
+      { url: container.getConnectionString(), options: { directConnection: true } },
+    );
+    await adapter.connect();
+  } catch (error) {
+    captureMongoStartupFailure({
+      containerName,
+      error,
+      capturedOutput: startupOutput,
+      cleanupOnFailure: !container,
+    });
+    throw error;
+  }
 });
 
 after(async () => {
