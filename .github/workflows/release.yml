@@ -5,12 +5,6 @@ on:
     branches: [main]
   workflow_dispatch:
 
-permissions:
-  contents: write
-  issues: write
-  id-token: write
-  attestations: write
-
 concurrency:
   group: pacman-release
   cancel-in-progress: false
@@ -19,8 +13,21 @@ env:
   IMAGE_NAME: docker.io/saintdle/pacman
 
 jobs:
+  validate:
+    name: Validate release candidate
+    permissions:
+      contents: read
+      security-events: write
+    uses: ./.github/workflows/ci.yml
+
   release:
     name: Build and publish release
+    needs: validate
+    permissions:
+      contents: write
+      issues: write
+      id-token: write
+      attestations: write
     runs-on: ubuntu-latest
     steps:
       - name: Validate manual release ref
@@ -36,21 +43,13 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0
+          ref: ${{ github.sha }}
 
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version-file: .nvmrc
           cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Run lint
-        run: npm run lint
-
-      - name: Run tests
-        run: npm test
 
       - name: Resolve release version
         id: version
@@ -64,6 +63,22 @@ jobs:
           version=$(printf '%s\n' "$release_output" | awk -F= '$1 == "version" { print $2 }')
           source=$(printf '%s\n' "$release_output" | awk -F= '$1 == "source" { print $2 }')
           echo "Publishing Pac-Man $version ($source)"
+
+      - name: Read existing release image digest
+        id: existing
+        if: steps.version.outputs.existing_release == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release view "$RELEASE_TAG" --json body --jq '.body' > existing-release-body.txt
+          mapfile -t digests < <(grep -Eo 'sha256:[0-9a-f]{64}' existing-release-body.txt || true)
+          if [[ ${#digests[@]} -ne 1 ]]; then
+            echo "Expected exactly one recorded image digest in release $RELEASE_TAG" >&2
+            exit 1
+          fi
+          echo "image_digest=${digests[0]}" >> "$GITHUB_OUTPUT"
 
       - name: Write release metadata
         if: steps.version.outputs.existing_release != 'true'
@@ -93,6 +108,7 @@ jobs:
           fi
 
       - name: Log in to Docker Hub
+        if: steps.version.outputs.existing_release != 'true'
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: docker.io
@@ -100,6 +116,7 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Set up QEMU
+        if: steps.version.outputs.existing_release != 'true'
         uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
 
       - name: Set up Docker Buildx
@@ -212,6 +229,8 @@ jobs:
         id: image
         env:
           VERSION_TAG: ${{ steps.version.outputs.version }}
+          EXISTING_RELEASE: ${{ steps.version.outputs.existing_release }}
+          RELEASE_IMAGE_DIGEST: ${{ steps.existing.outputs.image_digest }}
         run: |
           set -euo pipefail
           inspect_digest() {
@@ -240,20 +259,38 @@ jobs:
             return 1
           }
 
-          if ! version_digest=$(inspect_digest "$IMAGE_NAME:$VERSION_TAG"); then
-            echo "Unable to inspect $IMAGE_NAME:$VERSION_TAG after 5 attempts" >&2
-            exit 1
+          if [[ "$EXISTING_RELEASE" == "true" ]]; then
+            if [[ ! "$RELEASE_IMAGE_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+              echo "Existing release $VERSION_TAG has no valid recorded image digest" >&2
+              exit 1
+            fi
+            if ! version_digest=$(inspect_digest "$IMAGE_NAME:$VERSION_TAG"); then
+              echo "Unable to inspect $IMAGE_NAME:$VERSION_TAG after 5 attempts" >&2
+              exit 1
+            fi
+            if [[ "$version_digest" != "$RELEASE_IMAGE_DIGEST" ]]; then
+              echo "Immutable release digest mismatch: $IMAGE_NAME:$VERSION_TAG=$version_digest, recorded=$RELEASE_IMAGE_DIGEST" >&2
+              exit 1
+            fi
+            image_digest=$RELEASE_IMAGE_DIGEST
+            echo "Verified existing release $IMAGE_NAME:$VERSION_TAG at recorded digest $image_digest"
+          else
+            if ! version_digest=$(inspect_digest "$IMAGE_NAME:$VERSION_TAG"); then
+              echo "Unable to inspect $IMAGE_NAME:$VERSION_TAG after 5 attempts" >&2
+              exit 1
+            fi
+            if ! latest_digest=$(inspect_digest "$IMAGE_NAME:latest"); then
+              echo "Unable to inspect $IMAGE_NAME:latest after 5 attempts" >&2
+              exit 1
+            fi
+            if [[ "$version_digest" != "$latest_digest" ]]; then
+              echo "Manifest digest mismatch: $IMAGE_NAME:$VERSION_TAG=$version_digest, $IMAGE_NAME:latest=$latest_digest" >&2
+              exit 1
+            fi
+            image_digest=$version_digest
+            echo "Verified $IMAGE_NAME:$VERSION_TAG and $IMAGE_NAME:latest at $image_digest"
           fi
-          if ! latest_digest=$(inspect_digest "$IMAGE_NAME:latest"); then
-            echo "Unable to inspect $IMAGE_NAME:latest after 5 attempts" >&2
-            exit 1
-          fi
-          if [[ "$version_digest" != "$latest_digest" ]]; then
-            echo "Manifest digest mismatch: $IMAGE_NAME:$VERSION_TAG=$version_digest, $IMAGE_NAME:latest=$latest_digest" >&2
-            exit 1
-          fi
-          echo "image_digest=$version_digest" >> "$GITHUB_OUTPUT"
-          echo "Verified $IMAGE_NAME:$VERSION_TAG and $IMAGE_NAME:latest at $version_digest"
+          echo "image_digest=$image_digest" >> "$GITHUB_OUTPUT"
 
       - name: Install Cosign
         if: steps.version.outputs.existing_release != 'true'

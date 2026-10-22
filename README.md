@@ -24,10 +24,17 @@ process when `DB_TYPE=memory` (the default).
 
 ## Releases
 
-Merging a pull request into `main` runs the release workflow. Unless the pull
-request changes the `version` field in `package.json`, the workflow increments
-the highest published Pac-Man release by one patch version. For example, a
-published `0.7.5` becomes `0.7.6` automatically.
+Merging a pull request into `main` runs the release workflow. Before it builds
+or publishes an image, the workflow runs lint, unit tests, and both MongoDB and
+PostgreSQL adapter suites against the exact commit being released. A failed
+check blocks image publication, GitHub release creation, and chart promotion.
+
+Unless the pull request changes the `version` field in `package.json`, the
+workflow increments the highest published Pac-Man release by one patch version.
+For example, a published `0.7.5` becomes `0.7.6` automatically. Replaying a
+commit that already has a release reuses that release's recorded image digest
+and version tag. It does not depend on the current `latest` image or move that
+tag.
 
 To request a minor or major release, change both `package.json` and
 `package-lock.json` in the pull request, for example from `0.7.5` to `0.8.0`.
