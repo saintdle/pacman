@@ -36,6 +36,42 @@ test('Mongo startup diagnostics capture bounded Docker state and logs before cle
   assert.ok(messages.every((message) => message.length <= 12 * 1024 + 128));
 });
 
+test('Mongo startup diagnostics attempt cleanup after inspect failure without masking the startup error', async () => {
+  const startupError = new Error('original startup error');
+  const commands = [];
+  const messages = [];
+
+  await assert.rejects(
+    runMongoStartupWithDiagnostics({
+      containerName: 'pacman-mongo-adapter-test',
+      startContainer: async () => {
+        throw startupError;
+      },
+      initialize: async () => assert.fail('initialize must not run after startup rejection'),
+      runCommand: (args) => {
+        commands.push(args);
+        if (args[0] === 'inspect') return { status: 1, stderr: 'inspect failed' };
+        if (args[0] === 'rm') return { status: 1, stderr: 'remove failed' };
+        return { status: 0, stdout: 'logs captured' };
+      },
+      write: (message) => {
+        messages.push(message);
+        if (message.includes('Failed to remove startup container')) {
+          throw new Error('diagnostic reporter failed');
+        }
+      },
+    }),
+    (error) => error === startupError,
+  );
+
+  assert.deepEqual(commands, [
+    ['inspect', '--format', '{{json .State}}', 'pacman-mongo-adapter-test'],
+    ['logs', '--timestamps', '--tail', '100', 'pacman-mongo-adapter-test'],
+    ['rm', '-f', 'pacman-mongo-adapter-test'],
+  ]);
+  assert.ok(messages.some((message) => message.includes('Failed to remove startup container')));
+});
+
 test('Mongo startup output retains only its bounded tail', () => {
   const output = appendMongoStartupOutput('x'.repeat(12 * 1024 - 3), 'abcdef');
   assert.equal(output.length, 12 * 1024);

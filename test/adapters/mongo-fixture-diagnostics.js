@@ -63,7 +63,7 @@ export function captureMongoStartupFailure({
     safeWrite(write, `[mongo-fixture] Captured startup output: ${tail(capturedOutput)}`);
   }
 
-  if (cleanupOnFailure && inspect.status === 0) {
+  if (cleanupOnFailure) {
     const cleanup = safeRun(runCommand, ['rm', '-f', containerName]);
     if (cleanup.status !== 0) {
       safeWrite(write, `[mongo-fixture] Failed to remove startup container: ${tail(outputOf(cleanup)) || 'unknown Docker error'}`);
