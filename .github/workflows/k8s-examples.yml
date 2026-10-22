@@ -92,7 +92,7 @@ jobs:
             echo "Built image revision $image_revision does not match checked-out source $PACMAN_CHECKOUT_SHA." >&2
             exit 1
           fi
-          printf 'PACMAN_IMAGE_ID=%s\n' "$image_id" >> "$GITHUB_ENV"
+          printf 'PACMAN_DOCKER_IMAGE_ID=%s\n' "$image_id" >> "$GITHUB_ENV"
           printf 'Candidate image: %s\nSource: %s\nImage ID: %s\n' "$PACMAN_IMAGE" "$image_revision" "$image_id"
           node tools/smoke-container-images.js \
             --expected-revision "$PACMAN_CHECKOUT_SHA" \
@@ -157,6 +157,9 @@ jobs:
             --wait 120s \
             --kubeconfig "$kubeconfig"
           kind load docker-image "$PACMAN_IMAGE" --name "$cluster_name"
+          loaded_image_id=$(docker exec "${cluster_name}-control-plane" crictl inspecti "$PACMAN_IMAGE" | python3 -c 'import json, sys; status = json.load(sys.stdin)["status"]; expected_tag, expected_id = sys.argv[1:]; actual_id = status.get("id"); actual_id == expected_id or sys.exit("Kind image ID " + str(actual_id) + " does not match built Docker image ID " + expected_id); expected_tag in status.get("repoTags", []) or sys.exit("Kind did not load candidate tag " + expected_tag); digests = status.get("repoDigests", []); bool(digests) or sys.exit("Kind CRI did not report a candidate image digest"); print(digests[0])' "$PACMAN_IMAGE" "$PACMAN_DOCKER_IMAGE_ID")
+          printf 'PACMAN_IMAGE_ID=%s\n' "$loaded_image_id" >> "$GITHUB_ENV"
+          printf 'Loaded Kind image digest: %s\n' "$loaded_image_id"
 
       - name: Install kubeconform
         run: |
