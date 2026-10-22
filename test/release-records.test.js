@@ -47,12 +47,15 @@ test('app, chart, and compatibility lock fixtures round-trip deterministically',
   assertChartReferencesApp(chart, app);
   assertCompatibilityLockMatches(lock, { appRecord: app, chartRecord: chart });
   assert.deepEqual(createCompatibilityLock({ appRecord: app, chartRecord: chart }), lock);
+  assert.equal(app.kind, 'app-release');
+  assert.equal(chart.kind, 'chart-release');
+  assert.equal(lock.kind, 'consumer-compatibility-lock');
 });
 
 test('app records require full identities, valid digests, and observed platform descriptors', () => {
   const valid = {
     schema_version: 1,
-    record_type: 'app-release',
+    kind: 'app-release',
     app_version: '1.3.0',
     tag: 'pacman-v1.3.0',
     source: { repository: 'https://github.com/saintdle/pacman', commit: 'a'.repeat(40) },
@@ -66,6 +69,9 @@ test('app records require full identities, valid digests, and observed platform 
   };
 
   for (const invalid of [
+    { ...valid, app_version: '01.3.0', tag: 'pacman-v01.3.0' },
+    { ...valid, app_version: '1.3.0\n', tag: 'pacman-v1.3.0\n' },
+    { ...valid, tag: 'pacman-v10.3.0' },
     { ...valid, source: { ...valid.source, commit: 'a'.repeat(39) } },
     { ...valid, image: { ...valid.image, manifest_list_digest: 'sha256:bad' } },
     { ...valid, platforms: [{ platform: 'linux/amd64', digest: digest('c') }] },
@@ -137,9 +143,52 @@ test('chart and lock reject inconsistent app references, versions, sources, and 
   const mutablePackageReference = structuredClone(chart);
   mutablePackageReference.package.immutable_url = mutablePackageReference.package.immutable_url.replace('helm-chart-v0.4.2', 'latest');
   assert.throws(() => serializeChartReleaseRecord(mutablePackageReference));
+  const mismatchedChartTag = structuredClone(chart);
+  mismatchedChartTag.package.immutable_url = mismatchedChartTag.package.immutable_url.replace('helm-chart-v0.4.2', 'helm-chart-v10.4.20');
+  assert.throws(() => serializeChartReleaseRecord(mismatchedChartTag));
+  const malformedChartVersion = structuredClone(chart);
+  malformedChartVersion.chart_version = '01.3.0';
+  malformedChartVersion.package.filename = 'pacman-01.3.0.tgz';
+  malformedChartVersion.package.immutable_url = malformedChartVersion.package.immutable_url.replace('0.4.2', '01.3.0');
+  assert.throws(() => serializeChartReleaseRecord(malformedChartVersion));
+  const publicChartTag = structuredClone(chart);
+  publicChartTag.chart_version = '0.7.17';
+  publicChartTag.package.filename = 'pacman-0.7.17.tgz';
+  publicChartTag.package.immutable_url = 'https://github.com/saintdle/helm-charts/releases/download/pacman-0.7.17/pacman-0.7.17.tgz';
+  assert.doesNotThrow(() => serializeChartReleaseRecord(publicChartTag));
+  const publicChartLock = createCompatibilityLock({ appRecord: app, chartRecord: publicChartTag });
+  assert.doesNotThrow(() => serializeCompatibilityLock(publicChartLock));
   const mutableAppReference = structuredClone(chart);
   mutableAppReference.app_release.reference = 'https://github.com/saintdle/pacman/app-release-record.json';
   assert.throws(() => serializeChartReleaseRecord(mutableAppReference));
+
+  const migratedChart = structuredClone(chart);
+  migratedChart.source.repository = 'https://github.com/saintdle/pacman';
+  assert.doesNotThrow(() => serializeChartReleaseRecord(migratedChart));
+  assert.equal(chartReleaseRecordReference(migratedChart), 'https://github.com/saintdle/helm-charts/releases/download/helm-chart-v0.4.2/chart-release-record.json');
+  const migratedLock = createCompatibilityLock({ appRecord: app, chartRecord: migratedChart });
+  assert.equal(migratedLock.chart.source_repository, 'https://github.com/saintdle/pacman');
+  assert.match(migratedLock.chart.reference, /^https:\/\/github\.com\/saintdle\/helm-charts\//);
+  assert.match(migratedLock.chart.package_reference, /^https:\/\/github\.com\/saintdle\/helm-charts\//);
+  assert.doesNotThrow(() => assertCompatibilityLockMatches(migratedLock, { appRecord: app, chartRecord: migratedChart }));
+  const wrongSourcePin = structuredClone(migratedLock);
+  wrongSourcePin.chart.source_repository = 'https://github.com/saintdle/helm-charts';
+  assert.throws(() => assertCompatibilityLockMatches(wrongSourcePin, { appRecord: app, chartRecord: migratedChart }));
+  const wrongDistribution = structuredClone(migratedLock);
+  wrongDistribution.chart.reference = wrongDistribution.chart.reference.replace('/helm-charts/', '/pacman/');
+  assert.throws(() => serializeCompatibilityLock(wrongDistribution));
+  const wrongPackageDistribution = structuredClone(migratedLock);
+  wrongPackageDistribution.chart.package_reference = wrongPackageDistribution.chart.package_reference.replace('/helm-charts/', '/pacman/');
+  assert.throws(() => serializeCompatibilityLock(wrongPackageDistribution));
+  const lockLeadingZero = structuredClone(lock);
+  lockLeadingZero.chart.version = '01.3.0';
+  assert.throws(() => serializeCompatibilityLock(lockLeadingZero));
+  const lockMismatchedAppTag = structuredClone(lock);
+  lockMismatchedAppTag.app.reference = lockMismatchedAppTag.app.reference.replace('pacman-v1.3.0', 'pacman-v10.3.0');
+  assert.throws(() => serializeCompatibilityLock(lockMismatchedAppTag));
+  const lockMismatchedChartTag = structuredClone(lock);
+  lockMismatchedChartTag.chart.package_reference = lockMismatchedChartTag.chart.package_reference.replace('helm-chart-v0.4.2', 'helm-chart-v10.4.20');
+  assert.throws(() => serializeCompatibilityLock(lockMismatchedChartTag));
 });
 
 test('same-version app bytes cannot be replaced with a contradictory identity', () => {

@@ -1,18 +1,18 @@
 {
-  "schema_version": 1,
-  "record_type": "chart-release",
-  "chart_version": "0.4.2",
-  "source": {
-    "repository": "https://github.com/saintdle/helm-charts",
-    "commit": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-  },
-  "package": {
-    "filename": "pacman-0.4.2.tgz",
-    "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-    "immutable_url": "https://github.com/saintdle/helm-charts/releases/download/helm-chart-v0.4.2/pacman-0.4.2.tgz"
-  },
   "app_release": {
     "reference": "https://github.com/saintdle/pacman/releases/download/pacman-v1.3.0/app-release-record.json",
-    "sha256": "65c5080e0ed095601e41bb40901af5d589179e9565300abea2847fdcceee534b"
+    "sha256": "5e8c313be3fca5718168b8a2ad669bd56d49935d2d4f54c4315561124777db79"
+  },
+  "chart_version": "0.4.2",
+  "kind": "chart-release",
+  "package": {
+    "filename": "pacman-0.4.2.tgz",
+    "immutable_url": "https://github.com/saintdle/helm-charts/releases/download/helm-chart-v0.4.2/pacman-0.4.2.tgz",
+    "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  },
+  "schema_version": 1,
+  "source": {
+    "commit": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "repository": "https://github.com/saintdle/pacman"
   }
 }

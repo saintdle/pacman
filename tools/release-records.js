@@ -3,7 +3,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const versionPattern = /^(\d+)\.(\d+)\.(\d+)$/;
+const versionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const commitPattern = /^[a-f0-9]{40}$/;
 const imageDigestPattern = /^sha256:[a-f0-9]{64}$/;
 const packageChecksumPattern = /^[a-f0-9]{64}$/;
@@ -38,9 +38,31 @@ function requireKeys(value, keys, name) {
 }
 
 function requireVersion(value, name) {
-  if (typeof value !== 'string' || !versionPattern.test(value)) {
-    fail(`${name} must use MAJOR.MINOR.PATCH format`);
+  const match = typeof value === 'string' ? versionPattern.exec(value) : null;
+  if (!match || match[0] !== value) {
+    fail(`${name} must use canonical stable MAJOR.MINOR.PATCH format without leading zeroes`);
   }
+}
+
+function chartReleaseTag(tag, version, name) {
+  const supported = [`helm-chart-v${version}`, `pacman-${version}`];
+  if (!supported.includes(tag)) fail(`${name} must identify the exact chart_version in a supported release tag`);
+  return tag;
+}
+
+function appReleaseTag(tag, version, name) {
+  if (tag !== `pacman-v${version}`) fail(`${name} must identify the exact app_version`);
+  return tag;
+}
+
+function releaseAsset(value, name) {
+  const url = parseUrl(value, name, { githubOnly: true });
+  const segments = url.pathname.split('/');
+  if (segments.length !== 7 || !segments[1] || !segments[2] || segments[3] !== 'releases' || segments[4] !== 'download') {
+    fail(`${name} must identify a GitHub release asset`);
+  }
+  const repository = requireRepository(`${url.origin}/${segments[1]}/${segments[2]}`, `${name} repository`);
+  return { url, repository, tag: segments[5], filename: segments[6] };
 }
 
 function requireCommit(value, name) {
@@ -91,10 +113,10 @@ function requireSignatureReference(value, image) {
 
 function validateAppRecord(record) {
   requireKeys(record, [
-    'schema_version', 'record_type', 'app_version', 'tag', 'source', 'image',
+    'schema_version', 'kind', 'app_version', 'tag', 'source', 'image',
     'platforms', 'provenance_reference', 'signature_reference',
   ], 'app release record');
-  if (record.schema_version !== 1 || record.record_type !== 'app-release') fail('app release record must use schema_version 1 and record_type app-release');
+  if (record.schema_version !== 1 || record.kind !== 'app-release') fail('app release record must use schema_version 1 and kind app-release');
   requireVersion(record.app_version, 'app_version');
   if (record.tag !== `pacman-v${record.app_version}`) fail('tag must match app_version');
 
@@ -134,13 +156,13 @@ function validateAppRecord(record) {
 }
 
 function validateChartRecord(record) {
-  requireKeys(record, ['schema_version', 'record_type', 'chart_version', 'source', 'package', 'app_release'], 'chart release record');
-  if (record.schema_version !== 1 || record.record_type !== 'chart-release') fail('chart release record must use schema_version 1 and record_type chart-release');
+  requireKeys(record, ['schema_version', 'kind', 'chart_version', 'source', 'package', 'app_release'], 'chart release record');
+  if (record.schema_version !== 1 || record.kind !== 'chart-release') fail('chart release record must use schema_version 1 and kind chart-release');
   requireVersion(record.chart_version, 'chart_version');
 
   const source = record.source;
   requireKeys(source, ['repository', 'commit'], 'chart source');
-  const sourceUrl = requireRepository(source.repository, 'chart source repository');
+  requireRepository(source.repository, 'chart source repository');
   requireCommit(source.commit, 'chart source commit');
 
   const chartPackage = record.package;
@@ -149,32 +171,29 @@ function validateChartRecord(record) {
     fail('package filename must be a .tgz filename');
   }
   requirePackageChecksum(chartPackage.sha256, 'package sha256');
-  const packageUrl = parseUrl(chartPackage.immutable_url, 'package immutable_url', { githubOnly: true });
-  const packagePath = packageUrl.pathname.split('/');
-  const sourcePath = sourceUrl.pathname.split('/').filter(Boolean);
-  if (packagePath.at(-1) !== chartPackage.filename || !packagePath[5]?.includes(record.chart_version)
-    || packagePath[5].toLowerCase() === 'latest') {
-    fail('package immutable_url must include chart_version and end with package filename');
-  }
-  if (packagePath[1] !== sourcePath[0] || packagePath[2] !== sourcePath[1] || packagePath[3] !== 'releases' || packagePath[4] !== 'download') {
-    fail('package immutable_url must be a release asset from chart source repository');
+  const packageAsset = releaseAsset(chartPackage.immutable_url, 'package immutable_url');
+  chartReleaseTag(packageAsset.tag, record.chart_version, 'package immutable_url release tag');
+  if (packageAsset.filename !== chartPackage.filename || chartPackage.filename !== `pacman-${record.chart_version}.tgz`) {
+    fail('package immutable_url must end with the chart-versioned package filename');
   }
 
   requireKeys(record.app_release, ['reference', 'sha256'], 'chart app_release');
   const appReference = parseUrl(record.app_release.reference, 'app_release reference', { githubOnly: true });
   const appReferencePath = appReference.pathname.split('/');
   if (appReferencePath[3] !== 'releases' || appReferencePath[4] !== 'download'
-    || !/^pacman-v\d+\.\d+\.\d+$/.test(appReferencePath[5] ?? '')
     || appReferencePath.at(-1) !== 'app-release-record.json') {
     fail('app_release reference must identify a versioned app-release-record.json asset');
   }
+  const referencedAppVersion = (appReferencePath[5] ?? '').replace(/^pacman-v/, '');
+  requireVersion(referencedAppVersion, 'app_release reference version');
+  appReleaseTag(appReferencePath[5], referencedAppVersion, 'app_release reference tag');
   requirePackageChecksum(record.app_release.sha256, 'app_release sha256');
   return record;
 }
 
 function validateLock(lock) {
-  requireKeys(lock, ['schema_version', 'record_type', 'app', 'chart', 'supported_evidence_lanes'], 'consumer compatibility lock');
-  if (lock.schema_version !== 1 || lock.record_type !== 'consumer-compatibility-lock') fail('compatibility lock must use schema_version 1 and record_type consumer-compatibility-lock');
+  requireKeys(lock, ['schema_version', 'kind', 'app', 'chart', 'supported_evidence_lanes'], 'consumer compatibility lock');
+  if (lock.schema_version !== 1 || lock.kind !== 'consumer-compatibility-lock') fail('compatibility lock must use schema_version 1 and kind consumer-compatibility-lock');
 
   requireKeys(lock.app, [
     'version', 'reference', 'sha256', 'source_repository', 'source_commit',
@@ -184,6 +203,8 @@ function validateLock(lock) {
   const appReference = parseUrl(lock.app.reference, 'lock app reference', { githubOnly: true });
   requirePackageChecksum(lock.app.sha256, 'lock app sha256');
   const appSource = requireRepository(lock.app.source_repository, 'lock app source repository');
+  const appAsset = releaseAsset(lock.app.reference, 'lock app reference');
+  appReleaseTag(appAsset.tag, lock.app.version, 'lock app reference tag');
   const expectedAppPath = `${appSource.pathname}/releases/download/pacman-v${lock.app.version}/app-release-record.json`;
   if (appReference.origin !== appSource.origin || appReference.pathname !== expectedAppPath) {
     fail('lock app reference must identify the versioned app record from app source repository');
@@ -197,26 +218,21 @@ function validateLock(lock) {
     'source_repository', 'source_commit',
   ], 'lock chart identity');
   requireVersion(lock.chart.version, 'lock chart version');
-  const chartRecordReference = parseUrl(lock.chart.reference, 'lock chart reference', { githubOnly: true });
-  const chartRecordPath = chartRecordReference.pathname.split('/');
-  if (!chartRecordReference.pathname.endsWith('/chart-release-record.json') || !chartRecordPath[5]?.includes(lock.chart.version)
-    || chartRecordPath[5].toLowerCase() === 'latest') {
-    fail('lock chart reference must identify a versioned chart release record');
-  }
+  const chartRecordAsset = releaseAsset(lock.chart.reference, 'lock chart reference');
+  chartReleaseTag(chartRecordAsset.tag, lock.chart.version, 'lock chart reference release tag');
+  if (chartRecordAsset.filename !== 'chart-release-record.json') fail('lock chart reference must identify chart-release-record.json');
   requirePackageChecksum(lock.chart.sha256, 'lock chart sha256');
-  const packageReference = parseUrl(lock.chart.package_reference, 'lock chart package reference', { githubOnly: true });
-  const chartPackagePath = packageReference.pathname.split('/');
-  if (!packageReference.pathname.endsWith('.tgz') || !chartPackagePath[5]?.includes(lock.chart.version)
-    || chartPackagePath[5].toLowerCase() === 'latest') {
-    fail('lock chart package reference must identify a versioned chart package');
-  }
+  const packageAsset = releaseAsset(lock.chart.package_reference, 'lock chart package reference');
+  chartReleaseTag(packageAsset.tag, lock.chart.version, 'lock chart package release tag');
+  if (packageAsset.filename !== `pacman-${lock.chart.version}.tgz`) fail('lock chart package reference must identify the chart-versioned package');
   requirePackageChecksum(lock.chart.package_sha256, 'lock chart package sha256');
-  const chartSource = requireRepository(lock.chart.source_repository, 'lock chart source repository');
-  const sourceReleasePrefix = `${chartSource.pathname}/releases/download/`;
-  const expectedChartRecordPath = packageReference.pathname.replace(/[^/]+$/, 'chart-release-record.json');
-  if (packageReference.origin !== chartSource.origin || !packageReference.pathname.startsWith(sourceReleasePrefix)
-    || chartRecordReference.origin !== packageReference.origin || chartRecordReference.pathname !== expectedChartRecordPath) {
-    fail('lock chart references must resolve to versioned records and packages from chart source repository');
+  requireRepository(lock.chart.source_repository, 'lock chart source repository');
+  const expectedChartRecordPath = packageAsset.url.pathname.replace(/[^/]+$/, 'chart-release-record.json');
+  if (chartRecordAsset.repository.origin !== packageAsset.repository.origin
+    || chartRecordAsset.repository.pathname !== packageAsset.repository.pathname
+    || chartRecordAsset.tag !== packageAsset.tag
+    || chartRecordAsset.url.pathname !== expectedChartRecordPath) {
+    fail('lock chart record and package references must identify sibling assets in one distribution release');
   }
   requireCommit(lock.chart.source_commit, 'lock chart source commit');
 
@@ -319,7 +335,7 @@ export function createAppReleaseRecordFromManifest(input) {
   }
   const record = {
     schema_version: 1,
-    record_type: 'app-release',
+    kind: 'app-release',
     app_version: input.appVersion,
     tag: input.tag,
     source: { repository: input.sourceRepository, commit: input.sourceCommit },
@@ -380,7 +396,7 @@ export function createCompatibilityLock({ appRecord, chartRecord, supportedEvide
   assertChartReferencesApp(chartRecord, appRecord, { reference: appReference, sha256: appSha256 });
   const lock = {
     schema_version: 1,
-    record_type: 'consumer-compatibility-lock',
+    kind: 'consumer-compatibility-lock',
     app: {
       version: appRecord.app_version,
       reference: appReference,
@@ -420,10 +436,10 @@ export function assertCompatibilityLockMatches(lock, { appRecord, chartRecord })
 export function assertImmutableRecordBytes(existingBytes, proposedBytes) {
   const existing = parseJson(existingBytes, 'existing release record');
   const proposed = parseJson(proposedBytes, 'proposed release record');
-  const versionField = existing.record_type === 'app-release' ? 'app_version'
-    : existing.record_type === 'chart-release' ? 'chart_version' : null;
-  if (!versionField || existing.record_type !== proposed.record_type) fail('release record type cannot be changed');
-  const validate = existing.record_type === 'app-release' ? validateAppRecord : validateChartRecord;
+  const versionField = existing.kind === 'app-release' ? 'app_version'
+    : existing.kind === 'chart-release' ? 'chart_version' : null;
+  if (!versionField || existing.kind !== proposed.kind) fail('release record kind cannot be changed');
+  const validate = existing.kind === 'app-release' ? validateAppRecord : validateChartRecord;
   validate(existing);
   validate(proposed);
   if (existing[versionField] !== proposed[versionField]) fail(`${versionField} cannot be reassigned`);

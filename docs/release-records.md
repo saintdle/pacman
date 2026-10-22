@@ -17,7 +17,7 @@ include `appReleaseRecordReference`, `chartReleaseRecordReference`, and
 for an existing version. The workflow CLI supports `write-app`, `verify-app`,
 and `verify-legacy` for record creation and read-only replay validation.
 
-Schema-v1 app records use `record_type: "app-release"` and contain an
+Schema-v1 app records use `kind: "app-release"` and contain an
 independent app version and tag, the source repository and full commit SHA, the
 image repository and manifest-list digest, observed platform manifest
 descriptors, and provenance and signature references. Platform digests are
@@ -25,16 +25,21 @@ read from the verified image manifest list. The provenance reference points to
 the producing GitHub Actions run; the signature reference identifies the
 signed image digest.
 
-Chart records use `record_type: "chart-release"` and a chart version that is
+Chart records use `kind: "chart-release"` and a chart version that is
 independent of the app version. They pin the chart source commit, package
 filename, SHA-256 checksum and versioned immutable package URL, plus the app
 record URL and checksum. The chart-record URL is derived as the sibling
 `chart-release-record.json` asset at that package's versioned release URL.
+The chart source repository can differ from the repository that distributes
+the generated package. Both chart-record and package assets must come from the
+same immutable distribution release. Supported release tags are exactly
+`helm-chart-v<version>` and `pacman-<version>`; the version must be canonical
+stable SemVer without leading zeroes.
 This repository provides chart-record codecs and fixtures; chart publication
 is owned by the chart repository.
 
 Consumer compatibility locks use
-`record_type: "consumer-compatibility-lock"`. They pin both the app record and
+`kind: "consumer-compatibility-lock"`. They pin both the app record and
 chart record URLs and checksums, the chart package URL and checksum, both source
 commits and versions, the image digest, and the supported evidence lanes.
 Keeping the chart-record pin separate from the package pin lets consumers

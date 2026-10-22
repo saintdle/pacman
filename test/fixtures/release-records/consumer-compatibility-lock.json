@@ -1,24 +1,24 @@
 {
-  "schema_version": 1,
-  "record_type": "consumer-compatibility-lock",
   "app": {
-    "version": "1.3.0",
-    "reference": "https://github.com/saintdle/pacman/releases/download/pacman-v1.3.0/app-release-record.json",
-    "sha256": "65c5080e0ed095601e41bb40901af5d589179e9565300abea2847fdcceee534b",
-    "source_repository": "https://github.com/saintdle/pacman",
-    "source_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "image_manifest_list_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     "image_repository": "docker.io/saintdle/pacman",
-    "image_manifest_list_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    "reference": "https://github.com/saintdle/pacman/releases/download/pacman-v1.3.0/app-release-record.json",
+    "sha256": "5e8c313be3fca5718168b8a2ad669bd56d49935d2d4f54c4315561124777db79",
+    "source_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "source_repository": "https://github.com/saintdle/pacman",
+    "version": "1.3.0"
   },
   "chart": {
-    "version": "0.4.2",
-    "reference": "https://github.com/saintdle/helm-charts/releases/download/helm-chart-v0.4.2/chart-release-record.json",
-    "sha256": "b8284eb58b2f93000723b7ff4f26ac71201b8d0786b30032bc702d6b77fcb849",
     "package_reference": "https://github.com/saintdle/helm-charts/releases/download/helm-chart-v0.4.2/pacman-0.4.2.tgz",
     "package_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-    "source_repository": "https://github.com/saintdle/helm-charts",
-    "source_commit": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    "reference": "https://github.com/saintdle/helm-charts/releases/download/helm-chart-v0.4.2/chart-release-record.json",
+    "sha256": "1c5b6e471d338d25dceef368bfe612ab487c2022d4d5eca1ea5fa744dfcb020a",
+    "source_commit": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "source_repository": "https://github.com/saintdle/pacman",
+    "version": "0.4.2"
   },
+  "kind": "consumer-compatibility-lock",
+  "schema_version": 1,
   "supported_evidence_lanes": [
     "app-manifest-list",
     "app-platform-descriptors",
