@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { appendMongoStartupOutput, captureMongoStartupFailure } from './mongo-fixture-diagnostics.js';
+import {
+  appendMongoStartupOutput,
+  captureMongoStartupFailure,
+  runMongoStartupWithDiagnostics,
+} from './mongo-fixture-diagnostics.js';
 
 test('Mongo startup diagnostics capture bounded Docker state and logs before cleanup', () => {
   const commands = [];
@@ -36,4 +40,23 @@ test('Mongo startup output retains only its bounded tail', () => {
   const output = appendMongoStartupOutput('x'.repeat(12 * 1024 - 3), 'abcdef');
   assert.equal(output.length, 12 * 1024);
   assert.equal(output.slice(-6), 'abcdef');
+});
+
+test('Mongo startup diagnostics preserve the original error if the reporter fails', async () => {
+  const startupError = new Error('original startup error');
+
+  await assert.rejects(
+    runMongoStartupWithDiagnostics({
+      containerName: 'pacman-mongo-adapter-test',
+      startContainer: async () => {
+        throw startupError;
+      },
+      initialize: async () => assert.fail('initialize must not run after startup rejection'),
+      runCommand: () => ({ status: 0, stdout: '{"Status":"exited","ExitCode":37}' }),
+      write: () => {
+        throw new Error('diagnostic reporter failed');
+      },
+    }),
+    (error) => error === startupError,
+  );
 });
