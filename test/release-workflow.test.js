@@ -58,6 +58,23 @@ function assertReleaseWorkflowFailClosed(workflow) {
   assert.match(releaseJob, /Set up Docker Buildx\n\s+if: steps\.policy\.outputs\.verify_image == 'true'/);
   assert.match(releaseJob, /Verify published manifest list\n\s+id: image\n\s+if: steps\.policy\.outputs\.verify_image == 'true'/);
   assert.match(releaseJob, /node tools\/release-policy\.js verify-digest/);
+  assert.match(releaseJob, /Resolve immutable app release record\n\s+id: record\n\s+if: steps\.policy\.outputs\.verify_image == 'true' && steps\.image\.outcome == 'success'/);
+  assert.match(releaseJob, /node tools\/release-records\.js verify-app/);
+  assert.match(releaseJob, /node tools\/release-records\.js verify-legacy/);
+  assert.match(releaseJob, /node tools\/release-records\.js write-app/);
+  assert.match(releaseJob, /gh release create [\s\S]*?release-metadata\.json [\s\S]*?app-release-record\.json/);
+  assert.match(releaseJob, /--arg version "\$RELEASE_VERSION"[\s\S]*?--arg tag "\$RELEASE_TAG"[\s\S]*?--arg commit "\$SOURCE_COMMIT"[\s\S]*?--arg app_record_ref/);
+  assert.match(releaseJob, /app_record_ref: \$app_record_ref, app_record_sha256: \$app_record_sha256/);
+  assert.doesNotMatch(releaseJob, /gh release upload|--clobber/, 'release replay must not replace immutable assets');
+  const stepOrder = [
+    'Sign published image digest',
+    'Resolve immutable app release record',
+    'Write release metadata',
+    'Create GitHub release',
+    'Dispatch Helm chart promotion',
+  ].map((name) => releaseJob.indexOf(`- name: ${name}`));
+  assert.ok(stepOrder.every((index) => index >= 0), 'record and release steps must all be present');
+  assert.deepEqual(stepOrder, [...stepOrder].sort((left, right) => left - right), 'records follow successful signing and precede release publication and dispatch');
   assert.doesNotMatch(releaseJob, /if:.*always\(\)/, 'release side effects must not override policy outputs with always()');
   assert.deepEqual([...jobs.keys()].sort(), ['release', 'validate']);
   return releaseJob;
