@@ -1,0 +1,130 @@
+{{- if eq .Values.database "mongo" }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "pacman.mongo.fullname" . }}-init
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "pacman.mongo.labels" $ | nindent 4 }}
+data:
+  init-user.sh: |
+    #!/bin/bash
+    set -e
+    mongosh "mongodb://${MONGO_INITDB_ROOT_USERNAME}:${MONGO_INITDB_ROOT_PASSWORD}@127.0.0.1:27017/admin?authSource=admin" <<EOF
+    use ${APP_DB_NAME};
+    if (!db.getUser("${APP_DB_USER}")) {
+      db.createUser({
+        user: "${APP_DB_USER}",
+        pwd: "${APP_DB_PWD}",
+        roles: [ { role: "readWrite", db: "${APP_DB_NAME}" } ]
+      });
+    }
+    EOF
+{{- if .Values.mongo.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "pacman.mongo.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pacman.mongo.labels" $ | nindent 4 }}
+spec:
+  accessModes:
+{{ toYaml .Values.mongo.persistence.accessModes | indent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.mongo.persistence.size | quote }}
+  {{- if .Values.mongo.persistence.storageClass }}
+  storageClassName: {{ .Values.mongo.persistence.storageClass | quote }}
+  {{- end }}
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "pacman.mongo.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pacman.mongo.labels" $ | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.mongo.service.port }}
+      targetPort: mongo
+      name: mongo
+  selector:
+    {{- include "pacman.mongo.selectorLabels" $ | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "pacman.mongo.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pacman.mongo.labels" $ | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "pacman.mongo.selectorLabels" $ | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "pacman.mongo.labels" $ | nindent 8 }}
+    spec:
+      restartPolicy: Always
+      securityContext:
+        {{- include "pacman.podSecurityContext" (dict "root" $ "ctx" .Values.mongo.podSecurityContext) | nindent 8 }}
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: mongo
+          image: "{{ .Values.mongo.image.repository }}:{{ .Values.mongo.image.tag }}"
+          imagePullPolicy: {{ .Values.mongo.image.pullPolicy }}
+          args: ["--bind_ip_all"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - name: mongo
+              containerPort: 27017
+          env:
+            - name: MONGO_INITDB_ROOT_USERNAME
+              valueFrom: { secretKeyRef: { name: {{ include "pacman.mongo.secretName" . }}, key: database-admin-name } }
+            - name: MONGO_INITDB_ROOT_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ include "pacman.mongo.secretName" . }}, key: database-admin-password } }
+            - name: APP_DB_NAME
+              valueFrom: { secretKeyRef: { name: {{ include "pacman.mongo.secretName" . }}, key: database-name } }
+            - name: APP_DB_USER
+              valueFrom: { secretKeyRef: { name: {{ include "pacman.mongo.secretName" . }}, key: database-user } }
+            - name: APP_DB_PWD
+              valueFrom: { secretKeyRef: { name: {{ include "pacman.mongo.secretName" . }}, key: database-password } }
+          volumeMounts:
+            - name: data
+              mountPath: /data/db
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d
+          {{- with .Values.mongo.livenessProbe }}
+          livenessProbe: {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.mongo.readinessProbe }}
+          readinessProbe: {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources: {{- toYaml .Values.mongo.resources | nindent 12 }}
+      volumes:
+        - name: data
+          {{- if .Values.mongo.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "pacman.mongo.fullname" . }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: init
+          configMap:
+            name: {{ include "pacman.mongo.fullname" . }}-init
+            defaultMode: 0755
+{{- end }}

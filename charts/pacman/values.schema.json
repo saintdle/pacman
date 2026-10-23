@@ -1,0 +1,106 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "demo": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "existingTokenSecret": { "type": "string", "maxLength": 253, "pattern": "^$|^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$" },
+        "tokenHeader": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$" },
+        "fileProbeEnabled": { "type": "boolean" },
+        "execProbeEnabled": { "type": "boolean" }
+      }
+    },
+    "simulator": {
+      "type": "object",
+      "properties": {
+        "users": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "faults": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "seed": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+            "durationSeconds": { "type": "integer", "minimum": 1, "maximum": 3600 },
+            "rules": {
+              "type": "array",
+              "maxItems": 32,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "operations": {
+                    "type": "array", "minItems": 1, "maxItems": 5, "uniqueItems": true,
+                    "items": { "type": "string", "enum": ["scoreRead", "scoreWrite", "userRead", "userWrite", "pageView"] }
+                  },
+                  "targetRole": { "type": "string", "enum": ["web", "score", "user"] },
+                  "errorRate": { "type": "number", "minimum": 0, "maximum": 1 },
+                  "errorStatus": { "type": "integer", "minimum": 500, "maximum": 599 },
+                  "delayRate": { "type": "number", "minimum": 0, "maximum": 1 },
+                  "delayMs": {
+                    "type": "object", "additionalProperties": false,
+                    "properties": {
+                      "min": { "type": "integer", "minimum": 0, "maximum": 10000 },
+                      "max": { "type": "integer", "minimum": 0, "maximum": 10000 }
+                    },
+                    "required": ["min", "max"]
+                  }
+                },
+                "required": ["operations", "targetRole", "errorRate", "errorStatus", "delayRate", "delayMs"]
+              }
+            }
+          },
+          "required": ["enabled", "seed", "durationSeconds", "rules"]
+        },
+        "securityProbes": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "seed": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+            "durationSeconds": { "type": "integer", "minimum": 1, "maximum": 3600 },
+            "operations": {
+              "type": "array", "maxItems": 2,
+              "items": {
+                "type": "object", "additionalProperties": false,
+                "properties": {
+                  "operation": { "type": "string", "enum": ["fileProbe", "execProbe"] },
+                  "ratePerSecond": { "type": "number", "minimum": 0, "maximum": 10 },
+                  "maxCount": { "type": "integer", "minimum": 1, "maximum": 1000 }
+                },
+                "required": ["operation", "ratePerSecond", "maxCount"]
+              }
+            }
+          },
+          "required": ["enabled", "seed", "durationSeconds", "operations"]
+        }
+      }
+    },
+    "serviceMonitor": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "interval": { "type": "string", "minLength": 1 },
+        "labels": { "type": "object", "additionalProperties": { "type": "string" } }
+      }
+    },
+    "ciliumNetworkPolicy": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "denyScoreWrites": { "type": "boolean" },
+        "monitoringNamespace": { "type": "string", "minLength": 1, "maxLength": 63 }
+      }
+    },
+    "tetragon": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "fileProbeMode": { "type": "string", "enum": ["observe", "enforce"] },
+        "execProbeMode": { "type": "string", "enum": ["observe", "enforce"] }
+      }
+    }
+  }
+}

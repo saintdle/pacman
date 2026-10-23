@@ -1,0 +1,139 @@
+name: Pac-Man chart CI
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pacman-chart-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CHART_DIR: charts/pacman
+  SOURCE_CHART_REPOSITORY: saintdle/helm-charts
+  SOURCE_CHART_SHA: c24c5267340a58259cf3d7c8f337ace4c19d1d7a
+  KIND_VERSION: v0.30.0
+
+jobs:
+  chart-contracts:
+    name: chart-contracts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out exact pull request source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Confirm source identity
+        run: |
+          set -euo pipefail
+          checkout_sha=$(git rev-parse HEAD)
+          if [[ "$checkout_sha" != "$GITHUB_SHA" ]]; then
+            echo "Checked-out source $checkout_sha does not match event source $GITHUB_SHA." >&2
+            exit 1
+          fi
+
+      - name: Check out pinned chart source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: ${{ env.SOURCE_CHART_REPOSITORY }}
+          ref: ${{ env.SOURCE_CHART_SHA }}
+          path: donor-chart
+          persist-credentials: false
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v5
+        with:
+          version: v3.16.4
+
+      - name: Ensure Mike Farah yq is available
+        run: |
+          set -euo pipefail
+          if ! command -v yq >/dev/null 2>&1 || ! yq --version 2>&1 | grep -q 'mikefarah/yq'; then
+            command -v go >/dev/null 2>&1 || {
+              echo "Go is required to install the pinned yq fallback." >&2
+              exit 1
+            }
+            install_dir="$RUNNER_TEMP/pacman-chart-tools"
+            mkdir -p "$install_dir"
+            GOBIN="$install_dir" go install github.com/mikefarah/yq/v4@v4.47.2
+            export PATH="$install_dir:$PATH"
+            echo "$install_dir" >> "$GITHUB_PATH"
+          fi
+          yq --version
+
+      - name: Lint chart
+        run: helm lint "$CHART_DIR"
+
+      - name: Verify application probe contract
+        run: bash tools/check-pacman-probes.sh "$CHART_DIR"
+
+      - name: Verify PostgreSQL migration lifecycle
+        run: bash tools/check-pacman-postgres-migration.sh "$CHART_DIR"
+
+      - name: Verify fault-demo contract
+        run: bash tools/check-pacman-fault-demo.sh "$CHART_DIR"
+
+      - name: Verify optional-resource contract
+        run: bash tools/check-pacman-optional-resources.sh "$CHART_DIR"
+
+      - name: Compare pinned chart source and rendered behavior
+        run: bash tools/check-pacman-chart-equivalence.sh donor-chart "$CHART_DIR"
+
+      - name: Verify single chart publishing authority
+        run: bash tools/check-pacman-publisher-authority.sh
+
+  candidate-lifecycle:
+    name: chart-lifecycle (${{ matrix.database }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        database: [mongo, postgres]
+    steps:
+      - name: Check out exact pull request source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v5
+        with:
+          version: v3.16.4
+
+      - name: Install Kind with checksum verification
+        run: |
+          set -euo pipefail
+          case "$(uname -m)" in
+            x86_64) kind_arch=amd64 ;;
+            aarch64|arm64) kind_arch=arm64 ;;
+            *) echo "Unsupported runner architecture: $(uname -m)" >&2; exit 1 ;;
+          esac
+
+          temp_dir=$(mktemp -d)
+          trap 'rm -rf "$temp_dir"' EXIT
+          curl -fsSL --retry 3 --retry-all-errors --retry-delay 2 \
+            -o "$temp_dir/kind-linux-${kind_arch}" \
+            "https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-linux-${kind_arch}"
+          curl -fsSL --retry 3 --retry-all-errors --retry-delay 2 \
+            -o "$temp_dir/kind-linux-${kind_arch}.sha256sum" \
+            "https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-linux-${kind_arch}.sha256sum"
+          grep -F "kind-linux-${kind_arch}" "$temp_dir/kind-linux-${kind_arch}.sha256sum" \
+            | (cd "$temp_dir" && sha256sum -c --status)
+          sudo install -m 0755 "$temp_dir/kind-linux-${kind_arch}" /usr/local/bin/kind
+          kind version
+          kubectl version --client=true
+
+      - name: Run candidate install and upgrade lifecycle
+        env:
+          DATABASE: ${{ matrix.database }}
+        run: bash tools/check-pacman-lifecycle.sh "$CHART_DIR" . "$DATABASE"

@@ -1,0 +1,92 @@
+{{- if .Values.roles.enabled -}}
+{{- $root := . -}}
+{{- range $role := list "score" "user" -}}
+{{- $cfg := index $root.Values.roles $role -}}
+{{- $name := printf "pacman-%s" $role -}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "pacman.fullname" $root }}-{{ $role }}
+  namespace: {{ $root.Release.Namespace }}
+  labels:
+    {{- include "pacman.labels" (dict "root" $root "name" $name "role" $role) | nindent 4 }}
+spec:
+  replicas: {{ $cfg.replicas }}
+  selector:
+    matchLabels:
+      {{- include "pacman.selectorLabels" (dict "root" $root "name" $name "role" $role) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "pacman.labels" (dict "root" $root "name" $name "role" $role) | nindent 8 }}
+        {{- with $root.Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations: {{- include "pacman.demo.annotations" $root | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "pacman.serviceAccountName" $root }}
+      {{- with $root.Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- include "pacman.podSecurityContext" (dict "root" $root "ctx" $root.Values.podSecurityContext) | nindent 8 }}
+      containers:
+        - name: pacman
+          image: {{ include "pacman.image" $root }}
+          imagePullPolicy: {{ $root.Values.image.pullPolicy }}
+          securityContext: {{- toYaml $root.Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: APP_ROLE
+              value: {{ $role | quote }}
+            - name: MY_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: DEMO_SECURITY_MODE
+              value: {{ $root.Values.demo.enabled | quote }}
+            - name: DEMO_TOKEN_HEADER
+              value: {{ $root.Values.demo.tokenHeader | quote }}
+            - name: DEMO_FILE_PROBE_ENABLED
+              value: {{ $root.Values.demo.fileProbeEnabled | quote }}
+            - name: DEMO_EXEC_PROBE_ENABLED
+              value: {{ $root.Values.demo.execProbeEnabled | quote }}
+            {{- include "pacman.demo.tokenEnv" $root | nindent 12 }}
+            {{- include "pacman.dbEnv" $root | nindent 12 }}
+            {{- with $root.Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+{{ include "pacman.applicationProbes" $root | nindent 10 }}
+          resources: {{- toYaml ($cfg.resources | default $root.Values.resources) | nindent 12 }}
+      {{- with $root.Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $root.Values.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $root.Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "pacman.fullname" $root }}-{{ $role }}
+  namespace: {{ $root.Release.Namespace }}
+  labels:
+    {{- include "pacman.labels" (dict "root" $root "name" $name "role" $role) | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "pacman.selectorLabels" (dict "root" $root "name" $name "role" $role) | nindent 4 }}
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+{{ end }}
+{{- end -}}

@@ -1,0 +1,51 @@
+Thanks for installing the {{ .Chart.Name }} chart (version {{ .Chart.Version }}).
+
+Backend: {{ .Values.database }}
+
+1. Check status:
+   kubectl -n {{ .Release.Namespace }} get pods,svc
+
+2. Reach the app:
+{{- if .Values.ingress.enabled }}
+   Ingress hosts:
+   {{- range .Values.ingress.hosts }}
+   - http://{{ .host }}/
+   {{- end }}
+{{- else if eq .Values.service.type "LoadBalancer" }}
+   Wait for the LoadBalancer to be allocated:
+     kubectl -n {{ .Release.Namespace }} get svc {{ include "pacman.fullname" . }} -w
+   Then open http://<EXTERNAL-IP>:{{ .Values.service.port }}/
+{{- else if eq .Values.service.type "NodePort" }}
+   NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+   PORT=$(kubectl -n {{ .Release.Namespace }} get svc {{ include "pacman.fullname" . }} -o jsonpath='{.spec.ports[0].nodePort}')
+   echo "http://${NODE_IP}:${PORT}/"
+{{- else }}
+   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "pacman.fullname" . }} 8080:{{ .Values.service.port }}
+   open http://127.0.0.1:8080/
+{{- end }}
+
+3. Health endpoints:
+   kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "pacman.fullname" . }} -- node -e 'require("http").get("http://127.0.0.1:8080/healthz", r => { console.log(r.statusCode); r.resume(); if (r.statusCode !== 200) process.exitCode = 1; }).on("error", e => { console.error(e.message); process.exit(1); })'
+{{- if .Values.roles.enabled }}
+
+Multi-role mode is on: the frontend runs as the "web" role and proxies score
+and user API calls to the backend Services:
+   - {{ include "pacman.fullname" . }}-score:8080
+   - {{ include "pacman.fullname" . }}-user:8080
+   kubectl -n {{ .Release.Namespace }} get deploy,svc -l app.kubernetes.io/part-of=pacman
+{{- end }}
+{{- if .Values.simulator.enabled }}
+
+A load simulator ({{ include "pacman.fullname" . }}-simulator) is driving traffic
+through the frontend. Follow it with:
+   kubectl -n {{ .Release.Namespace }} logs -l app.kubernetes.io/component=load-generator -f
+{{- end }}
+
+{{- if eq .Values.database "postgres" }}
+{{- if .Values.postgres.migration.enabled }}
+
+PostgreSQL schema migrations run as a Kubernetes Job
+({{ include "pacman.postgres.fullname" . }}-migrate). Inspect it with:
+   kubectl -n {{ .Release.Namespace }} get jobs
+{{- end }}
+{{- end }}

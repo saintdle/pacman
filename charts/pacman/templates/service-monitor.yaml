@@ -1,0 +1,30 @@
+{{- if .Values.serviceMonitor.enabled -}}
+{{- $labels := include "pacman.commonLabels" . | fromYaml -}}
+{{- $labels = mergeOverwrite $labels .Values.serviceMonitor.labels -}}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "pacman.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- toYaml $labels | nindent 4 }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace | quote }}
+  selector:
+    matchExpressions:
+      - key: app.kubernetes.io/name
+        operator: In
+        values:
+          - pacman-frontend
+          - pacman-score
+          - pacman-user
+      - key: app.kubernetes.io/instance
+        operator: In
+        values:
+          - {{ .Release.Name | quote }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.serviceMonitor.interval | quote }}
+{{- end -}}
