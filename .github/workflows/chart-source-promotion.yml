@@ -1,0 +1,237 @@
+name: Reconcile Pac-Man chart source
+
+on:
+  release:
+    types: [published]
+  schedule:
+    - cron: '37 * * * *'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Reconcile releases, propose a rollback, or resume after a rollback
+        required: true
+        default: reconcile
+        type: choice
+        options: [reconcile, rollback, resume]
+      rollback_app_record_ref:
+        description: Immutable schema-v1 app release record URL for a rollback proposal
+        required: false
+        type: string
+      rollback_app_record_sha256:
+        description: SHA-256 of the immutable rollback app record
+        required: false
+        type: string
+      rollback_reason:
+        description: Reason for the rollback proposal
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: pacman-chart-source-promotion
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    name: propose monotonic chart source update
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out main
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Confirm helm-charts has transferred source authority
+        id: authority
+        env:
+          RELEASE_AUTOMATION_TOKEN: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
+        run: node tools/chart-publisher-authority.mjs
+
+      - name: Resolve the latest immutable app release
+        id: release
+        if: steps.authority.outputs.active == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
+          EVENT_RELEASE_TAG: ${{ github.event.release.tag_name || '' }}
+        run: |
+          set -euo pipefail
+          release_tag="$EVENT_RELEASE_TAG"
+          if [[ "${{ inputs.mode || 'reconcile' }}" == rollback ]]; then
+            release_tag=$(sed -nE 's#^https://github.com/saintdle/pacman/releases/download/(pacman-v[0-9]+\.[0-9]+\.[0-9]+)/app-release-record\.json$#\1#p' <<< "${{ inputs.rollback_app_record_ref || '' }}")
+            [[ -n "$release_tag" ]] || { echo 'Rollback requires a schema-v1 app-record release URL.' >&2; exit 1; }
+          fi
+          if [[ -z "$release_tag" ]]; then
+            release_tag=$(gh release list --repo saintdle/pacman --limit 1 --json tagName --jq '.[0].tagName')
+          fi
+          [[ "$release_tag" == pacman-v* ]] || {
+            echo "No Pac-Man release is available for chart source promotion." >&2
+            exit 1
+          }
+          mkdir -p "$RUNNER_TEMP/pacman-chart-release"
+          gh release download "$release_tag" --repo saintdle/pacman \
+            --pattern app-release-record.json --pattern release-metadata.json \
+            --dir "$RUNNER_TEMP/pacman-chart-release"
+          version=$(jq -er '.version' "$RUNNER_TEMP/pacman-chart-release/release-metadata.json")
+          tag=$(jq -er '.tag' "$RUNNER_TEMP/pacman-chart-release/release-metadata.json")
+          commit=$(jq -er '.commit' "$RUNNER_TEMP/pacman-chart-release/release-metadata.json")
+          image_digest=$(jq -er '.image_digest' "$RUNNER_TEMP/pacman-chart-release/release-metadata.json")
+          [[ "$tag" == "$release_tag" && "$version" == "${release_tag#pacman-v}" ]] || {
+            echo "App release metadata does not match $release_tag." >&2
+            exit 1
+          }
+          {
+            echo "APP_VERSION=$version"
+            echo "RELEASE_TAG=$tag"
+            echo "SOURCE_COMMIT=$commit"
+            echo "IMAGE_DIGEST=$image_digest"
+            echo "SOURCE_REPOSITORY=https://github.com/saintdle/pacman"
+            echo "APP_RECORD_PATH=$RUNNER_TEMP/pacman-chart-release/app-release-record.json"
+            echo "RELEASE_METADATA_PATH=$RUNNER_TEMP/pacman-chart-release/release-metadata.json"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Verify immutable app release record
+        id: record
+        if: steps.authority.outputs.active == 'true'
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.APP_VERSION }}
+          RELEASE_TAG: ${{ steps.release.outputs.RELEASE_TAG }}
+          SOURCE_REPOSITORY: ${{ steps.release.outputs.SOURCE_REPOSITORY }}
+          SOURCE_COMMIT: ${{ steps.release.outputs.SOURCE_COMMIT }}
+          IMAGE_NAME: docker.io/saintdle/pacman
+          IMAGE_DIGEST: ${{ steps.release.outputs.IMAGE_DIGEST }}
+        run: |
+          set -euo pipefail
+          node tools/release-records.js verify-app \
+            "$RUNNER_TEMP/pacman-chart-release/app-release-record.json" \
+            "$RUNNER_TEMP/pacman-chart-release/release-metadata.json" >> "$GITHUB_OUTPUT"
+
+      - name: Read current chart source versions
+        id: current
+        if: steps.authority.outputs.active == 'true'
+        run: node tools/pacman-chart-source-promotion.mjs read charts/pacman/Chart.yaml charts/pacman/values.yaml >> "$GITHUB_OUTPUT"
+
+      - name: Read the merged promotion state
+        id: current-state
+        if: steps.authority.outputs.active == 'true'
+        run: |
+          set -euo pipefail
+          if [[ -f pacman-chart-source-promotion-state.json ]]; then
+            { echo 'state<<EOF'; cat pacman-chart-source-promotion-state.json; echo 'EOF'; } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Preserve only a verified pending chart source proposal
+        id: pending
+        if: steps.authority.outputs.active == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
+        run: |
+          set -euo pipefail
+          state_path="$RUNNER_TEMP/pacman-chart-pending-state.json"
+          prs_path="$RUNNER_TEMP/pacman-chart-pending-prs.json"
+          printf 'null\n' > "$state_path"
+          branch_sha=""
+          if git fetch --quiet origin +refs/heads/automation/pacman-chart-source:refs/remotes/origin/automation/pacman-chart-source 2>/dev/null; then
+            branch_sha=$(git rev-parse refs/remotes/origin/automation/pacman-chart-source)
+            git show refs/remotes/origin/automation/pacman-chart-source:pacman-chart-source-promotion-state.json > "$state_path" 2>/dev/null || printf 'null\n' > "$state_path"
+          fi
+          gh pr list --repo saintdle/pacman --head automation/pacman-chart-source --base main --state all \
+            --json state,headRefName,headRefOid,baseRefName,baseRefOid,isCrossRepository > "$prs_path"
+          selected=$(PENDING_BRANCH_SHA="$branch_sha" PENDING_BASE_SHA="$(git rev-parse HEAD)" \
+            node tools/pacman-chart-source-promotion.mjs filter-pending "$state_path" "$prs_path")
+          {
+            if [[ "$selected" != null ]]; then
+              echo 'state<<EOF'
+              printf '%s\n' "$selected"
+              echo 'EOF'
+            fi
+            if jq -e '[.[] | select(.state == "OPEN" and .isCrossRepository == false)] | length > 0' "$prs_path" >/dev/null; then
+              echo 'open=true'
+            else
+              echo 'open=false'
+            fi
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Plan the next chart version
+        id: plan
+        if: steps.authority.outputs.active == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
+          APP_VERSION: ${{ steps.release.outputs.APP_VERSION }}
+          IMAGE_DIGEST: ${{ steps.release.outputs.IMAGE_DIGEST }}
+          APP_RECORD_REFERENCE: ${{ steps.record.outputs.reference }}
+          APP_RECORD_SHA256: ${{ steps.record.outputs.sha256 }}
+          SOURCE_COMMIT: ${{ steps.release.outputs.SOURCE_COMMIT }}
+          PROMOTION_MODE: ${{ inputs.mode || 'reconcile' }}
+          ROLLBACK_REASON: ${{ inputs.rollback_reason || '' }}
+          PENDING_STATE: ${{ steps.pending.outputs.state || '' }}
+          CURRENT_STATE: ${{ steps.current-state.outputs.state || '' }}
+          CURRENT_APP_VERSION: ${{ steps.current.outputs.app_version }}
+          CURRENT_CHART_VERSION: ${{ steps.current.outputs.chart_version }}
+          CURRENT_IMAGE_DIGEST: ${{ steps.current.outputs.image_digest }}
+        run: |
+          set -euo pipefail
+          RELEASED_CHART_TAGS=$(gh release list --repo saintdle/helm-charts --limit 100 --json tagName --jq '[.[].tagName | select(startswith("pacman-"))] | join(",")')
+          if [[ "$PROMOTION_MODE" == rollback ]]; then
+            [[ "$APP_RECORD_REFERENCE" == "${{ inputs.rollback_app_record_ref || '' }}" && "$APP_RECORD_SHA256" == "${{ inputs.rollback_app_record_sha256 || '' }}" ]] || {
+              echo 'Rollback identity does not match the verified app release record.' >&2
+              exit 1
+            }
+          fi
+          plan=$(RELEASED_CHART_TAGS="$RELEASED_CHART_TAGS" node tools/pacman-chart-source-promotion.mjs plan)
+          printf '%s\n' "$plan" >> "$GITHUB_OUTPUT"
+
+      - name: Keep one source promotion proposal at a time
+        id: proposal
+        if: steps.authority.outputs.active == 'true' && steps.plan.outputs.action != '' && steps.plan.outputs.action != 'noop'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
+        run: |
+          set -euo pipefail
+          open_count=$(gh pr list --repo saintdle/pacman --base main --state open --json headRefName \
+            --jq '[.[] | select(.headRefName | startswith("automation/pacman-chart-source-"))] | length')
+          if [[ "$open_count" != 0 ]]; then
+            echo "An app-owned chart source promotion is already open; scheduled reconciliation will retry after it closes."
+            echo "create=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "create=true" >> "$GITHUB_OUTPUT"
+
+      - name: Create the app-owned chart source proposal
+        if: steps.authority.outputs.active == 'true' && steps.plan.outputs.action != '' && steps.plan.outputs.action != 'noop' && steps.proposal.outputs.create == 'true' && steps.pending.outputs.open != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
+          APP_VERSION: ${{ steps.release.outputs.APP_VERSION }}
+          CHART_VERSION: ${{ steps.plan.outputs.chart_version }}
+          IMAGE_DIGEST: ${{ steps.release.outputs.IMAGE_DIGEST }}
+          PROMOTION_STATE: ${{ steps.plan.outputs.state }}
+        run: |
+          set -euo pipefail
+          branch="automation/pacman-chart-source"
+          if git ls-remote --exit-code origin "refs/heads/$branch" >/dev/null 2>&1; then
+            branch="$branch-$APP_VERSION"
+            if git ls-remote --exit-code origin "refs/heads/$branch" >/dev/null 2>&1; then
+              echo "Promotion branch $branch already exists; refusing to overwrite it." >&2
+              exit 1
+            fi
+          fi
+          git switch -c "$branch"
+          node tools/pacman-chart-source-promotion.mjs apply charts/pacman/Chart.yaml charts/pacman/values.yaml
+          printf '%s\n' "$PROMOTION_STATE" > pacman-chart-source-promotion-state.json
+          helm lint charts/pacman
+          git diff --check
+          git add charts/pacman/Chart.yaml charts/pacman/values.yaml pacman-chart-source-promotion-state.json
+          git commit -m "chore(chart): propose Pac-Man $APP_VERSION as $CHART_VERSION"
+          git push origin "$branch"
+          gh pr create --repo saintdle/pacman --head "$branch" --base main \
+            --title "chore(chart): promote Pac-Man $APP_VERSION as $CHART_VERSION" \
+            --body "Update the Pac-Man chart source to app version $APP_VERSION and chart version $CHART_VERSION using the immutable release image digest. The change updates chart metadata and image identity only; it does not rebuild the application image."

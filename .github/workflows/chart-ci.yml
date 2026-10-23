@@ -2,12 +2,16 @@ name: Pac-Man chart CI
 
 on:
   pull_request:
+  push:
+    branches: [main]
+    paths:
+      - 'charts/pacman/**'
 
 permissions:
   contents: read
 
 concurrency:
-  group: pacman-chart-${{ github.event.pull_request.number || github.ref }}
+  group: pacman-chart-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 
 env:
