@@ -120,6 +120,9 @@ export function planChartSourceProposal({ mode = 'reconcile', candidate, current
   requireAppIdentity(candidate, 'candidate promotion');
   if (!['reconcile', 'rollback', 'resume'].includes(mode)) fail('unsupported promotion mode');
   if (mode === 'resume' && state?.mode !== 'rollback') fail('resume requires a pending rollback proposal');
+  if (mode === 'resume' && compareVersions(parseVersion(candidate.version, 'resume app version'), parseVersion(current.appVersion, 'current app version')) < 0) {
+    return { action: 'noop', reason: 'resume-target-is-older-than-current' };
+  }
   if (state?.mode === 'rollback' && mode === 'reconcile') return { action: 'noop', reason: 'rollback-state-requires-explicit-resume' };
   if (mode === 'reconcile' && pending) {
     const decision = preservePendingChartSourcePromotion({ pending: pending.app, candidate });

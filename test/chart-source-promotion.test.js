@@ -63,6 +63,7 @@ test('rollback is a verified proposal and resume requires its pending state', ()
   assert.equal(proposal.action, 'rollback-proposal');
   assert.equal(proposal.candidate.reference, rollback.reference);
   assert.equal(planChartSourceProposal({ mode: 'resume', candidate: rollback, current: { appVersion: rollback.version, imageDigest: rollback.imageDigest, chartVersion: proposal.chartVersion }, state: { mode: 'rollback' } }).action, 'resume');
+  assert.deepEqual(planChartSourceProposal({ mode: 'resume', candidate: rollback, current: { appVersion: '0.9.0', imageDigest: digest('e'), chartVersion: '3.0.0' }, state: { mode: 'rollback' } }), { action: 'noop', reason: 'resume-target-is-older-than-current' });
   assert.throws(() => planChartSourceProposal({ mode: 'resume', candidate: rollback, current, state: { mode: 'automatic' } }), /pending rollback/);
 });
 
@@ -74,7 +75,8 @@ test('workflow gates proposal creation on the guard output and exposes verified 
   assert.match(workflow, /CURRENT_STATE: \$\{\{ steps\.current-state\.outputs\.state \|\| '' \}\}/);
   assert.match(workflow, /--json state,headRefName,headRefOid,baseRefName,baseRefOid,isCrossRepository/);
   assert.match(workflow, /echo "create=false" >> "\$GITHUB_OUTPUT"/);
-  assert.match(workflow, /if: steps\.plan\.outputs\.action != 'noop' && steps\.proposal\.outputs\.create == 'true' && steps\.pending\.outputs\.open != 'true'/);
+  assert.match(workflow, /if: steps\.authority\.outputs\.active == 'true' && steps\.plan\.outputs\.action != '' && steps\.plan\.outputs\.action != 'noop'/);
+  assert.match(workflow, /if: steps\.authority\.outputs\.active == 'true' && steps\.plan\.outputs\.action != '' && steps\.plan\.outputs\.action != 'noop' && steps\.proposal\.outputs\.create == 'true' && steps\.pending\.outputs\.open != 'true'/);
   assert.match(workflow, /options: \[reconcile, rollback, resume\]/);
   assert.match(workflow, /rollback_app_record_ref/);
   assert.match(workflow, /Rollback identity does not match the verified app release record/);

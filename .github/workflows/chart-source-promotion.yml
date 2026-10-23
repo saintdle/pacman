@@ -192,7 +192,7 @@ jobs:
 
       - name: Keep one source promotion proposal at a time
         id: proposal
-        if: steps.plan.outputs.action != 'noop'
+        if: steps.authority.outputs.active == 'true' && steps.plan.outputs.action != '' && steps.plan.outputs.action != 'noop'
         env:
           GH_TOKEN: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
         run: |
@@ -207,7 +207,7 @@ jobs:
           echo "create=true" >> "$GITHUB_OUTPUT"
 
       - name: Create the app-owned chart source proposal
-        if: steps.plan.outputs.action != 'noop' && steps.proposal.outputs.create == 'true' && steps.pending.outputs.open != 'true'
+        if: steps.authority.outputs.active == 'true' && steps.plan.outputs.action != '' && steps.plan.outputs.action != 'noop' && steps.proposal.outputs.create == 'true' && steps.pending.outputs.open != 'true'
         env:
           GH_TOKEN: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
           APP_VERSION: ${{ steps.release.outputs.APP_VERSION }}
