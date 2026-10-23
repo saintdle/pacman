@@ -50,6 +50,7 @@ function assertReleaseWorkflowFailClosed(workflow) {
   const policyStep = /- name: Gate release effects\n([\s\S]*?)(?=\n\s{6}- name:|$)/.exec(releaseJob)?.[1];
   assert.ok(policyStep, 'release must call the production release policy');
   assert.match(policyStep, /RELEASE_VALIDATION_RESULT: \$\{\{ needs\.validate\.result \}\}/);
+  assert.match(policyStep, /APP_RELEASE_ELIGIBLE: \$\{\{ steps\.version\.outputs\.app_release_eligible \}\}/);
   assert.match(policyStep, /run: node tools\/release-policy\.js/);
 
   assert.match(releaseJob, /Build and publish multi-architecture image\n\s+id: build\n\s+if: steps\.policy\.outputs\.publish == 'true'/);
@@ -152,6 +153,7 @@ test('workflow-facing policy outputs match failure, publication, and replay deci
           ...process.env,
           GITHUB_OUTPUT: outputPath,
           RELEASE_VALIDATION_RESULT: scenario.validation,
+          APP_RELEASE_ELIGIBLE: 'true',
           EXISTING_RELEASE: scenario.existing,
           RELEASE_VERSION: scenario.version,
           LATEST_RELEASE: scenario.latest,
@@ -172,6 +174,7 @@ test('each failed mandatory gate executes no publication, latest mutation, relea
     const { events, effects } = stubEffects();
     const plan = await executeReleasePolicy({
       validation,
+      appReleaseEligible: true,
       existingRelease: false,
       version: '0.8.1',
       latestRelease: '0.8.0',
@@ -186,6 +189,7 @@ test('a successful candidate requests one image publication and one downstream d
   const { events, effects } = stubEffects();
   const plan = await executeReleasePolicy({
     validation: allGatesPassed,
+    appReleaseEligible: true,
     existingRelease: false,
     version: '0.8.1',
     latestRelease: '0.8.0',
@@ -202,6 +206,7 @@ test('an older immutable replay verifies its image without pushing, moving lates
   const { events, effects } = stubEffects();
   const plan = await executeReleasePolicy({
     validation: allGatesPassed,
+    appReleaseEligible: true,
     existingRelease: true,
     version: '0.7.15',
     latestRelease: '0.7.17',
@@ -217,6 +222,7 @@ test('replaying the newest immutable release verifies its digest and dispatches 
   const { events, effects } = stubEffects();
   const plan = await executeReleasePolicy({
     validation: allGatesPassed,
+    appReleaseEligible: true,
     existingRelease: true,
     version: '0.7.17',
     latestRelease: '0.7.17',
@@ -232,6 +238,7 @@ test('an immutable replay with a digest mismatch fails before any effect', async
   const { events, effects } = stubEffects();
   await assert.rejects(executeReleasePolicy({
     validation: allGatesPassed,
+    appReleaseEligible: true,
     existingRelease: true,
     version: '0.7.17',
     latestRelease: '0.7.17',
@@ -239,4 +246,48 @@ test('an immutable replay with a digest mismatch fails before any effect', async
     imageDigest: digestB,
   }, effects), /Immutable release digest mismatch/);
   assert.deepEqual(events, []);
+});
+
+test('docs and chart-only changes request no app publication or promotion effects', async () => {
+  const { events, effects } = stubEffects();
+  const plan = await executeReleasePolicy({
+    validation: allGatesPassed,
+    appReleaseEligible: false,
+    existingRelease: false,
+    version: 'not-a-version',
+    latestRelease: 'not-a-version',
+  }, effects);
+
+  assert.deepEqual(plan, { verifyImage: false, publish: false, createRelease: false, dispatch: false });
+  assert.deepEqual(events, []);
+});
+
+test('push filters include app build inputs and the future co-located chart path', () => {
+  const push = /\n {2}push:\n([\s\S]*?)(?=\n {2}workflow_dispatch:)/.exec(release)?.[1];
+  assert.ok(push, 'release workflow must retain main push triggering');
+  assert.match(push, /branches: \[main\]/);
+  for (const path of [
+    "'.dockerignore'",
+    "'.nvmrc'",
+    "'docker/Dockerfile'",
+    "'package.json'",
+    "'package-lock.json'",
+    "'proto/**'",
+    "'public/**'",
+    "'src/**'",
+    "'tools/healthcheck.js'",
+    "'tools/demo-exec-probe.js'",
+    "'demo-fixtures/**'",
+    "'views/**'",
+    "'charts/pacman/**'",
+  ]) {
+    assert.ok(push.includes(path), `release trigger must include ${path}`);
+  }
+
+  const manual = /\n {2}workflow_dispatch:\n([\s\S]*?)(?=\n\nconcurrency:)/.exec(release)?.[1];
+  assert.ok(manual, 'workflow_dispatch must remain enabled');
+  assert.match(manual, /release_bump:/);
+  assert.match(manual, /options:\s*\[patch, minor, major\]/);
+  assert.match(release, /RELEASE_BUMP: \$\{\{ inputs\.release_bump \}\}/);
+  assert.match(release, /concurrency:\n {2}group: pacman-release\n {2}cancel-in-progress: false/);
 });
