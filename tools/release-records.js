@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -421,6 +421,42 @@ export function createCompatibilityLock({ appRecord, chartRecord, supportedEvide
   return lock;
 }
 
+export function createChartReleaseBundle({ appRecordBytes, chartVersion, sourceRepository, sourceCommit, packageReference, packageBytes }) {
+  const appRecord = parseAppReleaseRecord(appRecordBytes);
+  const source = requireRepository(sourceRepository, 'chart source repository');
+  if (source.href !== 'https://github.com/saintdle/pacman') fail('generated chart source must be saintdle/pacman');
+  requireCommit(sourceCommit, 'chart source commit');
+  requireVersion(chartVersion, 'chart version');
+  const packageChecksum = sha256Hex(packageBytes);
+  const packageAsset = releaseAsset(packageReference, 'chart package reference');
+  chartReleaseTag(packageAsset.tag, chartVersion, 'chart package release tag');
+  if (packageAsset.repository.href !== 'https://github.com/saintdle/helm-charts'
+    || packageAsset.filename !== `pacman-${chartVersion}.tgz`) {
+    fail('generated chart package must use the versioned immutable helm-charts release asset');
+  }
+  const chartRecord = {
+    schema_version: 1,
+    kind: 'chart-release',
+    chart_version: chartVersion,
+    source: { repository: source.href, commit: sourceCommit },
+    package: { filename: packageAsset.filename, sha256: packageChecksum, immutable_url: packageAsset.url.href },
+    app_release: { reference: appReleaseRecordReference(appRecord), sha256: sha256Hex(appRecordBytes) },
+  };
+  const chartRecordBytes = Buffer.from(serializeChartReleaseRecord(chartRecord));
+  const compatibilityLock = createCompatibilityLock({ appRecord, chartRecord });
+  const compatibilityLockBytes = Buffer.from(serializeCompatibilityLock(compatibilityLock));
+  return { chartRecord, chartRecordBytes, compatibilityLock, compatibilityLockBytes, packageChecksum };
+}
+
+export function verifyChartReleaseBundle({ appRecordBytes, chartRecordBytes, compatibilityLockBytes, packageBytes }) {
+  const appRecord = parseAppReleaseRecord(appRecordBytes);
+  const chartRecord = parseChartReleaseRecord(chartRecordBytes);
+  const lock = parseCompatibilityLock(compatibilityLockBytes);
+  assertCompatibilityLockMatches(lock, { appRecord, chartRecord });
+  if (chartRecord.package.sha256 !== sha256Hex(packageBytes)) fail('chart record package checksum does not match the immutable package bytes');
+  return true;
+}
+
 export function assertCompatibilityLockMatches(lock, { appRecord, chartRecord }) {
   validateLock(lock);
   validateAppRecord(appRecord);
@@ -556,6 +592,42 @@ function verifyAppFile(recordPath, metadataPath) {
   };
 }
 
+function writeChartBundle(inputPath, outputDirectory) {
+  const input = parseJson(readFileSync(inputPath), 'chart bundle input');
+  const packageBytes = readFileSync(input.package_path);
+  const appRecordBytes = readFileSync(input.app_record_path);
+  const bundle = createChartReleaseBundle({
+    appRecordBytes,
+    chartVersion: input.chart_version,
+    sourceRepository: input.source_repository,
+    sourceCommit: input.source_commit,
+    packageReference: input.package_reference,
+    packageBytes,
+  });
+  mkdirSync(outputDirectory, { recursive: true });
+  writeFileSync(resolve(outputDirectory, 'chart-release-record.json'), bundle.chartRecordBytes, { flag: 'wx' });
+  writeFileSync(resolve(outputDirectory, 'consumer-compatibility-lock.json'), bundle.compatibilityLockBytes, { flag: 'wx' });
+  return {
+    package_sha256: bundle.packageChecksum,
+    chart_record_sha256: sha256Hex(bundle.chartRecordBytes),
+    compatibility_lock_sha256: sha256Hex(bundle.compatibilityLockBytes),
+  };
+}
+
+function verifyChartBundleFiles(appRecordPath, chartRecordPath, lockPath, packagePath) {
+  const appRecordBytes = readFileSync(appRecordPath);
+  const chartRecordBytes = readFileSync(chartRecordPath);
+  const compatibilityLockBytes = readFileSync(lockPath);
+  const packageBytes = readFileSync(packagePath);
+  verifyChartReleaseBundle({ appRecordBytes, chartRecordBytes, compatibilityLockBytes, packageBytes });
+  return {
+    chart_release_reference: chartReleaseRecordReference(parseChartReleaseRecord(chartRecordBytes)),
+    chart_release_sha256: sha256Hex(chartRecordBytes),
+    compatibility_lock_sha256: sha256Hex(compatibilityLockBytes),
+    package_sha256: sha256Hex(packageBytes),
+  };
+}
+
 function verifyLegacyFile(metadataPath) {
   const bytes = readFileSync(metadataPath);
   const expected = expectedFromEnvironment();
@@ -578,7 +650,7 @@ function printOutputs(outputs) {
 }
 
 function main() {
-  const [command, first, second] = process.argv.slice(2);
+  const [command, first, second, third, fourth] = process.argv.slice(2);
   if (command === 'write-app') {
     printOutputs(writeAppRecord(first, second));
     return;
@@ -591,7 +663,15 @@ function main() {
     printOutputs(verifyLegacyFile(first));
     return;
   }
-  fail('usage: release-records.js write-app <manifest.json> <output.json> | verify-app <record.json> | verify-legacy <metadata.json>');
+  if (command === 'write-chart-bundle') {
+    printOutputs(writeChartBundle(first, second));
+    return;
+  }
+  if (command === 'verify-chart-bundle') {
+    printOutputs(verifyChartBundleFiles(first, second, third, fourth));
+    return;
+  }
+  fail('usage: release-records.js write-app <manifest.json> <output.json> | verify-app <record.json> <metadata.json> | verify-legacy <metadata.json> | write-chart-bundle <input.json> <output-dir> | verify-chart-bundle <app-record.json> <chart-record.json> <lock.json> <package.tgz>');
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

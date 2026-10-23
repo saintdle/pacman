@@ -12,6 +12,7 @@ import {
   assertImmutableRecordBytes,
   chartReleaseRecordReference,
   createAppReleaseRecordFromManifest,
+  createChartReleaseBundle,
   createCompatibilityLock,
   parseAppReleaseRecord,
   parseChartReleaseRecord,
@@ -21,6 +22,7 @@ import {
   serializeChartReleaseRecord,
   serializeCompatibilityLock,
   sha256Hex,
+  verifyChartReleaseBundle,
 } from '../tools/release-records.js';
 
 const readFixture = (name) => JSON.parse(readFileSync(new URL(`./fixtures/release-records/${name}`, import.meta.url), 'utf8'));
@@ -50,6 +52,39 @@ test('app, chart, and compatibility lock fixtures round-trip deterministically',
   assert.equal(app.kind, 'app-release');
   assert.equal(chart.kind, 'chart-release');
   assert.equal(lock.kind, 'consumer-compatibility-lock');
+});
+
+test('generated chart bundle pins the Pacman source SHA, independent chart version, immutable package, app record, and lock', () => {
+  const packageBytes = Buffer.from('synthetic fixture: helm package bytes');
+  const chartVersion = '0.7.18';
+  const packageReference = `https://github.com/saintdle/helm-charts/releases/download/pacman-${chartVersion}/pacman-${chartVersion}.tgz`;
+  const bundle = createChartReleaseBundle({
+    appRecordBytes: serializeAppReleaseRecord(app),
+    chartVersion,
+    sourceRepository: 'https://github.com/saintdle/pacman',
+    sourceCommit: 'c'.repeat(40),
+    packageReference,
+    packageBytes,
+  });
+
+  assert.equal(bundle.chartRecord.chart_version, chartVersion);
+  assert.equal(bundle.chartRecord.source.commit, 'c'.repeat(40));
+  assert.equal(bundle.chartRecord.package.immutable_url, packageReference);
+  assert.equal(bundle.chartRecord.package.sha256, sha256Hex(packageBytes));
+  assert.equal(bundle.chartRecord.app_release.sha256, sha256Hex(serializeAppReleaseRecord(app)));
+  assertCompatibilityLockMatches(bundle.compatibilityLock, { appRecord: app, chartRecord: bundle.chartRecord });
+  assert.doesNotThrow(() => verifyChartReleaseBundle({
+    appRecordBytes: serializeAppReleaseRecord(app),
+    chartRecordBytes: bundle.chartRecordBytes,
+    compatibilityLockBytes: bundle.compatibilityLockBytes,
+    packageBytes,
+  }));
+  assert.throws(() => verifyChartReleaseBundle({
+    appRecordBytes: serializeAppReleaseRecord(app),
+    chartRecordBytes: bundle.chartRecordBytes,
+    compatibilityLockBytes: bundle.compatibilityLockBytes,
+    packageBytes: Buffer.from('different package bytes'),
+  }), /package checksum does not match/);
 });
 
 test('app records require full identities, valid digests, and observed platform descriptors', () => {
