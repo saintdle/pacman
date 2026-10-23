@@ -10,7 +10,6 @@ import { readDistributionChartPublisherAuthority } from './chart-publisher-autho
 const versionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const commitPattern = /^[a-f0-9]{40}$/;
 const digestPattern = /^sha256:[a-f0-9]{64}$/;
-const checksumPattern = /^[a-f0-9]{64}$/;
 const apiBase = 'https://api.github.com';
 
 function fail(message) {

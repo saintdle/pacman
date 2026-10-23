@@ -45,7 +45,6 @@ export function resolveNextChartVersion(appVersionValue, currentChartVersionValu
 export function planChartSourcePromotion({ appVersion, imageDigest, currentAppVersion, currentImageDigest, currentChartVersion, releasedTags = [] }) {
   const app = parseVersion(appVersion, 'app version');
   const currentApp = parseVersion(currentAppVersion, 'current app version');
-  const chart = parseVersion(currentChartVersion, 'current chart version');
   if (!digestPattern.test(imageDigest ?? '') || !digestPattern.test(currentImageDigest ?? '')) fail('image digests must be SHA-256 digests');
   const comparison = compareVersions(app, currentApp);
   if (comparison < 0) return { promotion: 'noop', reason: 'older-app-release' };
@@ -144,7 +143,7 @@ export function planChartSourceProposal({ mode = 'reconcile', candidate, current
 function replaceOne(text, expression, value, name) {
   const matches = text.match(expression);
   if (!matches || matches.length !== 1) fail(`${name} must appear exactly once in chart metadata`);
-  return text.replace(expression, (line) => line.replace(/(:\s*)(?:(["'])(.*?)\2|([^\s#]+))/, (_match, separator, quote, _quoted, bare) => {
+  return text.replace(expression, (line) => line.replace(/(:\s*)(?:(["'])(.*?)\2|([^\s#]+))/, (_match, separator, quote, _quoted, _bare) => {
     const wrapper = quote ?? '';
     return `${separator}${wrapper}${value}${wrapper}`;
   }));
