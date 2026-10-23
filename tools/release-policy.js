@@ -38,9 +38,16 @@ function parseExistingRelease(value) {
   throw new Error(`existing release flag must be true or false: ${value}`);
 }
 
+function parseAppReleaseEligibility(value) {
+  if (value === true || value === 'true') return true;
+  if (value === false || value === 'false') return false;
+  throw new Error(`app release eligibility must be true or false: ${value}`);
+}
+
 function releasePolicy(input) {
   const noEffects = { verifyImage: false, publish: false, createRelease: false, dispatch: false };
   if (!validationPassed(input.validation)) return noEffects;
+  if (!parseAppReleaseEligibility(input.appReleaseEligible)) return noEffects;
 
   const existingRelease = parseExistingRelease(input.existingRelease);
   const version = parseVersion(input.version, 'release version');
@@ -83,6 +90,7 @@ async function main() {
   const requestedEffects = [];
   const plan = await executeReleasePolicy({
     validation: process.env.RELEASE_VALIDATION_RESULT,
+    appReleaseEligible: process.env.APP_RELEASE_ELIGIBLE,
     existingRelease: process.env.EXISTING_RELEASE,
     version: process.env.RELEASE_VERSION,
     latestRelease: process.env.LATEST_RELEASE,

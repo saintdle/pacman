@@ -3,7 +3,28 @@ name: Release
 on:
   push:
     branches: [main]
+    paths:
+      - '.dockerignore'
+      - '.nvmrc'
+      - 'charts/pacman/**'
+      - 'docker/Dockerfile'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'proto/**'
+      - 'public/**'
+      - 'src/**'
+      - 'tools/demo-exec-probe.js'
+      - 'tools/healthcheck.js'
+      - 'views/**'
+      - 'demo-fixtures/**'
   workflow_dispatch:
+    inputs:
+      release_bump:
+        description: Explicit application version bump
+        type: choice
+        required: true
+        default: patch
+        options: [patch, minor, major]
 
 concurrency:
   group: pacman-release
@@ -56,6 +77,7 @@ jobs:
         env:
           GITHUB_SHA: ${{ github.sha }}
           RELEASE_BASE_SHA: ${{ github.event.before || '' }}
+          RELEASE_BUMP: ${{ inputs.release_bump }}
         run: |
           set -euo pipefail
           release_output=$(node tools/resolve-release-version.js)
@@ -68,6 +90,7 @@ jobs:
         id: policy
         env:
           RELEASE_VALIDATION_RESULT: ${{ needs.validate.result }}
+          APP_RELEASE_ELIGIBLE: ${{ steps.version.outputs.app_release_eligible }}
           EXISTING_RELEASE: ${{ steps.version.outputs.existing_release }}
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
           LATEST_RELEASE: ${{ steps.version.outputs.latest_release }}
