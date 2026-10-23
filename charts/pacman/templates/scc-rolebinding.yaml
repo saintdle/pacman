@@ -1,0 +1,24 @@
+{{- if and (include "pacman.isOpenShift" .) .Values.openShift.sccRoleBinding.create -}}
+{{- $sa := include "pacman.serviceAccountName" . -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "pacman.fullname" . }}-nonroot-v2
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pacman.commonLabels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:openshift:scc:nonroot-v2
+subjects:
+  - kind: ServiceAccount
+    name: {{ $sa }}
+    namespace: {{ .Release.Namespace }}
+  {{- if ne $sa "default" }}
+  # MongoDB/PostgreSQL run under the namespace default ServiceAccount.
+  - kind: ServiceAccount
+    name: default
+    namespace: {{ .Release.Namespace }}
+  {{- end }}
+{{- end -}}

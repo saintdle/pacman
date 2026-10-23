@@ -1,0 +1,14 @@
+# Patterns to ignore when building packages.
+# Operator and editor files
+.DS_Store
+.git/
+.gitignore
+.idea/
+.vscode/
+*.tmproj
+*.swp
+*.bak
+*.tmp
+*.orig
+# Helm
+*.tgz

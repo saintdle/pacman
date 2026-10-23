@@ -1,0 +1,26 @@
+{{- if .Values.rbac.create }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "pacman.fullname" . }}-locator
+  labels: {{- include "pacman.frontend.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "nodes"]
+    verbs: ["get", "watch", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "pacman.fullname" . }}-locator
+  labels: {{- include "pacman.frontend.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "pacman.fullname" . }}-locator
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "pacman.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

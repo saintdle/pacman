@@ -1,0 +1,25 @@
+apiVersion: v2
+name: pacman
+description: |
+  Pac-Man (Node.js + Express) on Kubernetes with a MongoDB or PostgreSQL
+  backend. Hardened to Pod Security Standards "restricted", health/readiness
+  probes, optional ingress, and ClusterRole bindings for the in-app
+  pod/node location probe.
+type: application
+version: 0.7.17
+appVersion: "0.7.16"
+home: https://github.com/saintdle/pacman
+sources:
+  - https://github.com/saintdle/pacman
+  - https://github.com/saintdle/pacman-for-k8s
+icon: https://veducate.co.uk/wp-content/uploads/2021/09/Pac-Man-UI.jpg
+keywords:
+  - pacman
+  - game
+  - demo
+  - cilium
+maintainers:
+  - name: Dean Lewis
+    url: https://veducate.co.uk
+annotations:
+  category: Demo
