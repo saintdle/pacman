@@ -7,6 +7,23 @@ after it verifies the manifest list and signs the image. The existing
 compatibility period; the metadata asset also pins the app record URL and its
 SHA-256 checksum.
 
+The currently documented published pair is app `0.7.16` and chart `0.7.17`.
+App `0.7.16` was built from
+[`saintdle/pacman` commit `13f04d6e6aea62f1d32d57d90e4eff786083c02e`](https://github.com/saintdle/pacman/commit/13f04d6e6aea62f1d32d57d90e4eff786083c02e)
+as `docker.io/saintdle/pacman@sha256:592740129bce7530a347146b86647f8b516df3c19105aa4c2fe40b878840fccf`.
+The public `pacman-0.7.17` chart source tag resolves to
+[`saintdle/helm-charts` commit `1d11684428b2069aef8d4e69c37237b5b3c910a5`](https://github.com/saintdle/helm-charts/commit/1d11684428b2069aef8d4e69c37237b5b3c910a5).
+The later `c24c5267340a58259cf3d7c8f337ace4c19d1d7a` commit is a migration
+donor for a chart copy, not provenance for the published release.
+These published releases predate schema-v1 release records: their legacy
+metadata does not provide the v1 record proof for platform descriptors,
+provenance, signatures, or a consumer compatibility lock. This record-format
+limit does not mean platform manifests are absent. The public
+[native runtime run](https://github.com/saintdle/pacman-for-k8s/actions/runs/40221882676)
+resolved the published image index to its amd64 child/config and exercised it
+in the owned container runtime. Keep the missing v1 record proofs explicit;
+do not construct or relabel a v1 record for either release.
+
 The versioned codecs and validators are in
 [`tools/release-records.js`](../tools/release-records.js). Their public
 functions include `serializeAppReleaseRecord` / `parseAppReleaseRecord`,

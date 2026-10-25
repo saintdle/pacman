@@ -107,11 +107,13 @@ and OpenShift handling as the frontend, so no extra wiring is required.
 
 ## Fault and security-probe demos
 
-The chart still defaults to its pinned released Pac-Man image. That image does
-not include the new fault and security-probe runtime. Build and load a matching
-app candidate, then override the image in Helm before enabling these controls.
+Chart `0.7.17` defaults to app image `0.7.16`, which already includes the
+opt-in fault and synthetic security-probe runtime. These controls remain off by
+default, so the published pair can use the demos without an image override.
 
-From the root of the matching Pac-Man app source checkout, build the candidate.
+Build and load a custom app image only when testing unpublished app/runtime
+changes. From the root of the matching Pac-Man app source checkout, build that
+candidate.
 The revision label records the source commit used for the build:
 
 ```bash

@@ -50,6 +50,24 @@ for high and critical vulnerabilities with available fixes. When findings are
 present, the workflow opens a GitHub issue with affected packages, versions,
 severities, and advisory links.
 
+Application and chart releases have independent versions. The currently
+documented published pair is app `0.7.16` and chart `0.7.17`; the released
+`0.7.16` image already contains the opt-in fault and synthetic security-probe
+runtime described below. The chart keeps those controls disabled by default.
+See [`docs/release-records.md`](docs/release-records.md) for the immutable
+image identity and the evidence available for these legacy releases.
+
+`saintdle/pacman` maintains the application and editable chart source.
+`saintdle/pacman-for-k8s` maintains the platform installation surface and
+scenario catalog. `saintdle/helm-charts` serves packaged charts at the stable
+[Helm repository URL](https://saintdle.github.io/helm-charts); its existing
+publisher remains the sole live authority while the setting is unset or
+`helm-charts`. A separately approved switch selects the prepared generated
+publisher; verify its public package chain before retiring the legacy source.
+The generated publisher is not active by default. See
+[`docs/pacman-chart-source.md`](docs/pacman-chart-source.md) for source and
+recovery boundaries.
+
 Pull requests build the image locally and run the same Trivy scan before
 merge. The scan reports HIGH and CRITICAL findings with available fixes. Its
 step continues when it finds vulnerabilities, so findings alone do not fail
@@ -313,10 +331,11 @@ Example ConfigMap and patch files live under [`k8s/examples`](k8s/examples):
   [`overlays/tetragon`](k8s/examples/overlays/tetragon) apply optional
   CRD-backed resources only when those controllers are installed.
 - [`helm-values.yaml`](k8s/examples/helm-values.yaml) contains demo values for
-  a matching candidate chart and app image. The published defaults remain
-  unchanged. See [`k8s/examples/README.md`](k8s/examples/README.md) for Secret
-  setup and candidate install guidance. Pass this fragment to Helm with
-  `--values`.
+  chart `0.7.17` and its pinned app image `0.7.16`. The released image includes
+  the opt-in fault and synthetic probe runtime; this fragment enables demo
+  controls only when you install it and supply the referenced Secret. See
+  [`k8s/examples/README.md`](k8s/examples/README.md) for the stable install path
+  and Secret setup. Pass this fragment to Helm with `--values`.
 - [`values-openshift.yaml`](k8s/examples/values-openshift.yaml) documents the
   OpenShift override values for that chart (`openShift.enabled` and
   `openShift.sccRoleBinding.create`). The complete chart values schema lives in
@@ -480,7 +499,7 @@ this repository.
 
 The container image is built to run under an arbitrary, non-root UID, so it is
 compatible with OpenShift's `restricted-v2` SCC. The
-[Helm chart](https://github.com/saintdle/helm-charts/tree/main/charts/pacman)
+[editable Helm chart](charts/pacman/README.md)
 auto-detects OpenShift and drops the fixed `runAsUser`/`runAsGroup`/`fsGroup`
 from every pod so the SCC can inject a namespace-allocated UID; no configuration
 is required. See [`k8s/examples/values-openshift.yaml`](k8s/examples/values-openshift.yaml)
