@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
-import { planChartSourceProposal, planChartSourcePromotion, promoteChartSourceMetadata, resolveNextChartVersion, selectPendingChartSourceProposalState } from '../tools/pacman-chart-source-promotion.mjs';
+import { applyChartSourcePromotion, planChartSourceProposal, planChartSourcePromotion, promoteChartSourceMetadata, readChartSourceMetadata, resolveNextChartVersion, selectPendingChartSourceProposalState } from '../tools/pacman-chart-source-promotion.mjs';
 
 const digest = (letter) => `sha256:${letter.repeat(64)}`;
 
@@ -46,6 +48,52 @@ test('source promotion edits only chart version, app version, and image digest',
   }), /chart version must appear exactly once/);
 });
 
+test('managed raw examples follow chart image metadata across independent app and chart promotions', () => {
+  const baseChart = ['apiVersion: v2', 'name: pacman', 'version: 0.7.17', 'appVersion: "0.7.16"', ''].join('\n');
+  const baseValues = ['image:', '  repository: docker.io/saintdle/pacman', `  digest: "${digest('a')}"`, ''].join('\n');
+  const sourceMulti = readFileSync(new URL('../k8s/examples/multi-role-deployment.yaml', import.meta.url), 'utf8')
+    .replaceAll(/image: docker\.io\/saintdle\/pacman(?:@sha256:[a-f0-9]{64}|:latest)/g, 'image: docker.io/saintdle/pacman:latest');
+  const sourcePostgres = readFileSync(new URL('../k8s/examples/postgres-example.yaml', import.meta.url), 'utf8')
+    .replaceAll(/image: docker\.io\/saintdle\/pacman(?:@sha256:[a-f0-9]{64}|:latest)/g, 'image: docker.io/saintdle/pacman:latest');
+  const cases = [
+    { appVersion: '0.7.18', chartVersion: '0.7.17', imageDigest: digest('b') },
+    { appVersion: '0.7.16', chartVersion: '0.7.18', imageDigest: digest('a') },
+  ];
+  for (const candidate of cases) {
+    const directory = mkdtempSync(join(tmpdir(), 'pacman-example-generation-'));
+    try {
+      const chartPath = join(directory, 'Chart.yaml');
+      const valuesPath = join(directory, 'values.yaml');
+      const multiRolePath = join(directory, 'multi-role-deployment.yaml');
+      const postgresPath = join(directory, 'postgres-example.yaml');
+      writeFileSync(chartPath, baseChart);
+      writeFileSync(valuesPath, baseValues);
+      writeFileSync(multiRolePath, sourceMulti);
+      writeFileSync(postgresPath, sourcePostgres);
+      applyChartSourcePromotion({ chartPath, valuesPath, ...candidate, consumerPaths: { multiRolePath, postgresPath } });
+      const metadata = readChartSourceMetadata(chartPath, valuesPath);
+      assert.equal(metadata.chartVersion, candidate.chartVersion);
+      assert.equal(metadata.appVersion, candidate.appVersion);
+      const image = `docker.io/saintdle/pacman@${candidate.imageDigest}`;
+      assert.equal(readFileSync(multiRolePath, 'utf8'), sourceMulti.replaceAll('image: docker.io/saintdle/pacman:latest', `image: ${image}`));
+      assert.equal(readFileSync(postgresPath, 'utf8'), sourcePostgres.replaceAll('image: docker.io/saintdle/pacman:latest', `image: ${image}`));
+      assert.match(readFileSync(multiRolePath, 'utf8'), /name: pacman-web[\s\S]*name: pacman-score[\s\S]*name: pacman-user/);
+      assert.match(readFileSync(postgresPath, 'utf8'), /name: pacman-postgres-secret[\s\S]*name: pacman-postgres-data[\s\S]*name: pacman-postgres/);
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  }
+});
+
+test('tracked generic raw app images conform to the authoritative chart repository and digest', () => {
+  const metadata = readChartSourceMetadata(new URL('../charts/pacman/Chart.yaml', import.meta.url), new URL('../charts/pacman/values.yaml', import.meta.url));
+  const expected = `${metadata.imageRepository}@${metadata.imageDigest}`;
+  for (const [file, count] of [['multi-role-deployment.yaml', 3], ['postgres-example.yaml', 2]]) {
+    const content = readFileSync(new URL(`../k8s/examples/${file}`, import.meta.url), 'utf8');
+    const images = [...content.matchAll(/^\s*image:\s*(docker\.io\/saintdle\/pacman\S*)\s*$/gm)].map(([, image]) => image);
+    assert.equal(images.length, count, `${file} retains all named app image slots`);
+    assert.ok(images.every((image) => image === expected), `${file} matches chart values.yaml`);
+  }
+});
+
 test('a verified open proposal preserves ordering and rejects conflicting immutable identity', () => {
   const candidate = { version: '0.7.18', imageDigest: digest('b'), reference: 'https://github.com/saintdle/pacman/releases/download/pacman-v0.7.18/app-release-record.json', sha256: 'a'.repeat(64), sourceCommit: 'c'.repeat(40) };
   const pending = { schema_version: 1, kind: 'pacman-chart-source-promotion-state', mode: 'automatic', app: candidate, chartVersion: '0.7.19' };
@@ -81,4 +129,5 @@ test('workflow gates proposal creation on the guard output and exposes verified 
   assert.match(workflow, /rollback_app_record_ref/);
   assert.match(workflow, /Rollback identity does not match the verified app release record/);
   assert.match(workflow, /branch="\$branch-\$APP_VERSION"/);
+  assert.match(workflow, /git add charts\/pacman\/Chart\.yaml charts\/pacman\/values\.yaml k8s\/examples\/multi-role-deployment\.yaml k8s\/examples\/postgres-example\.yaml pacman-chart-source-promotion-state\.json/);
 });

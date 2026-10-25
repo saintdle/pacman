@@ -53,6 +53,20 @@ helm show values saintdle/pacman
 The raw manifests remain useful when demonstrating individual Kubernetes,
 Cilium, Prometheus, or Tetragon concepts without installing the full chart.
 
+## Example ownership and intentional differences
+
+`charts/pacman` is the editable packaged deployment. Chart-source promotion
+generates the Pac-Man image pins in [`multi-role-deployment.yaml`](multi-role-deployment.yaml)
+and [`postgres-example.yaml`](postgres-example.yaml) from that chart's app image
+repository and digest; those files remain raw teaching examples, not alternate
+chart sources.
+
+| Example | Purpose and intentional difference | Conformance |
+| --- | --- | --- |
+| `multi-role-deployment.yaml` | Raw migration and role-splitting lesson. It keeps the web, score, and user Services, ConfigMap, probes, and Mongo service names visible instead of using the chart's all-in-one default. | Promotion regenerates all three app image refs; the Kubernetes examples workflow applies this manifest. |
+| `postgres-example.yaml` | PostgreSQL teaching scenario with its own migration Job, Secret, PVC, and Postgres Service. It intentionally differs from the chart's Mongo-backed default. | Promotion regenerates the two Pac-Man app image refs; Postgres images and lifecycle resources remain scenario-owned. |
+| `helm-values.yaml`, `values-openshift.yaml`, patches, and optional controller resources | Input fragments or focused Cilium, Prometheus, and Tetragon teaching examples, not alternate generic deployments. | Existing chart contracts and Kubernetes example checks validate their applicable schemas and behavior. |
+
 The multi-role web Deployment enables `READINESS_CHECK_UPSTREAMS`, so its
 `/readyz` probe checks configured backends as well as the local database. This
 can remove the web pod from service while a backend is unavailable. The check

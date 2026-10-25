@@ -167,15 +167,42 @@ export function readChartSourceMetadata(chartPath, valuesPath) {
   const valuesYaml = readFileSync(valuesPath, 'utf8');
   const chartVersion = chartYaml.match(/^version:\s*(\S+)/m)?.[1]?.replace(/^['"]|['"]$/g, '');
   const appVersion = chartYaml.match(/^appVersion:\s*['"]?(\S+?)['"]?\s*$/m)?.[1];
+  const imageRepository = valuesYaml.match(/^\s+repository:\s*['"]?([^\s'"#]+)['"]?\s*$/m)?.[1];
   const imageDigest = valuesYaml.match(/^\s+digest:\s*['"]?(sha256:[a-f0-9]{64})['"]?\s*$/m)?.[1];
-  return { chartYaml, valuesYaml, chartVersion, appVersion, imageDigest };
+  return { chartYaml, valuesYaml, chartVersion, appVersion, imageRepository, imageDigest };
 }
 
-export function applyChartSourcePromotion({ chartPath, valuesPath, appVersion, chartVersion, imageDigest }) {
+function updatePacmanContainerImages(text, image, expectedContainers, name) {
+  let activeContainer = null;
+  const updatedContainers = [];
+  const next = text.split(/(?<=\n)/).map((line) => {
+    if (line.trim() === '---') activeContainer = null;
+    const container = /^\s*-\s+name:\s*([^\s#]+)/.exec(line);
+    if (container) activeContainer = container[1];
+    if (!expectedContainers.includes(activeContainer)) return line;
+    const imageLine = /^(\s*image:\s*)\S+(\s*)$/.exec(line.replace(/\n$/, ''));
+    if (!imageLine) return line;
+    updatedContainers.push(activeContainer);
+    return `${imageLine[1]}${image}${imageLine[2]}${line.endsWith('\n') ? '\n' : ''}`;
+  }).join('');
+  if (JSON.stringify([...updatedContainers].sort()) !== JSON.stringify([...expectedContainers].sort())) fail(`${name} must contain Pac-Man images in containers ${expectedContainers.join(', ')}; found ${updatedContainers.join(', ')}`);
+  return next;
+}
+
+export function applyChartSourcePromotion({ chartPath, valuesPath, appVersion, chartVersion, imageDigest, consumerPaths = {} }) {
   const current = readChartSourceMetadata(chartPath, valuesPath);
   const next = promoteChartSourceMetadata(current.chartYaml, current.valuesYaml, { appVersion, chartVersion, imageDigest });
+  const imageRepository = next.valuesYaml.match(/^\s+repository:\s*['"]?([^\s'"#]+)['"]?\s*$/m)?.[1];
+  if (!imageRepository || !/^[a-z0-9][a-z0-9.-]*(?::[0-9]+)?(?:\/[a-z0-9._-]+)+$/.test(imageRepository)) fail('chart image repository is invalid');
+  const image = `${imageRepository}@${imageDigest}`;
+  const multiRolePath = consumerPaths.multiRolePath ?? 'k8s/examples/multi-role-deployment.yaml';
+  const postgresPath = consumerPaths.postgresPath ?? 'k8s/examples/postgres-example.yaml';
+  const nextMultiRole = updatePacmanContainerImages(readFileSync(multiRolePath, 'utf8'), image, ['pacman', 'pacman', 'pacman'], multiRolePath);
+  const nextPostgres = updatePacmanContainerImages(readFileSync(postgresPath, 'utf8'), image, ['migrate', 'pacman'], postgresPath);
   writeFileSync(chartPath, next.chartYaml);
   writeFileSync(valuesPath, next.valuesYaml);
+  writeFileSync(multiRolePath, nextMultiRole);
+  writeFileSync(postgresPath, nextPostgres);
   return next;
 }
 

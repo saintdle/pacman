@@ -229,7 +229,7 @@ jobs:
           printf '%s\n' "$PROMOTION_STATE" > pacman-chart-source-promotion-state.json
           helm lint charts/pacman
           git diff --check
-          git add charts/pacman/Chart.yaml charts/pacman/values.yaml pacman-chart-source-promotion-state.json
+          git add charts/pacman/Chart.yaml charts/pacman/values.yaml k8s/examples/multi-role-deployment.yaml k8s/examples/postgres-example.yaml pacman-chart-source-promotion-state.json
           git commit -m "chore(chart): propose Pac-Man $APP_VERSION as $CHART_VERSION"
           git push origin "$branch"
           gh pr create --repo saintdle/pacman --head "$branch" --base main \
