@@ -85,10 +85,10 @@ test('current chart edits pass candidate contracts while migration parity stays 
 
     const valuesYamlPath = path.join(changedChart, 'values.yaml');
     const valuesYaml = readFileSync(valuesYamlPath, 'utf8');
-    const currentDigest = valuesYaml.match(/^  digest: "sha256:([a-f0-9]{64})"$/m)?.[1];
+    const currentDigest = valuesYaml.match(/^ {2}digest: "sha256:([a-f0-9]{64})"$/m)?.[1];
     assert.ok(currentDigest, 'candidate chart has a pinned image digest');
     const updatedDigest = currentDigest === 'b'.repeat(64) ? 'c'.repeat(64) : 'b'.repeat(64);
-    writeFileSync(valuesYamlPath, replaceExactlyOnce(valuesYaml, /^  digest: "sha256:[a-f0-9]{64}"$/gm, `  digest: "sha256:${updatedDigest}"`, 'image digest'));
+    writeFileSync(valuesYamlPath, replaceExactlyOnce(valuesYaml, /^ {2}digest: "sha256:[a-f0-9]{64}"$/gm, `  digest: "sha256:${updatedDigest}"`, 'image digest'));
 
     runOk('helm', ['lint', changedChart]);
     for (const contract of ['probes', 'postgres-migration', 'fault-demo', 'optional-resources']) {
