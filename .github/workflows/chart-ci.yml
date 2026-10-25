@@ -18,6 +18,7 @@ env:
   CHART_DIR: charts/pacman
   SOURCE_CHART_REPOSITORY: saintdle/helm-charts
   SOURCE_CHART_SHA: c24c5267340a58259cf3d7c8f337ace4c19d1d7a
+  MIGRATION_BASELINE_SHA: 4cc1b880ca6ca7359869057a1f4e822d9fd00ed4
   KIND_VERSION: v0.30.0
 
 jobs:
@@ -39,6 +40,15 @@ jobs:
             echo "Checked-out source $checkout_sha does not match event source $GITHUB_SHA." >&2
             exit 1
           fi
+
+      - name: Check out immutable migration baseline
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ env.MIGRATION_BASELINE_SHA }}
+          path: migration-baseline
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Check out pinned chart source
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -84,8 +94,12 @@ jobs:
       - name: Verify optional-resource contract
         run: bash tools/check-pacman-optional-resources.sh "$CHART_DIR"
 
-      - name: Compare pinned chart source and rendered behavior
-        run: bash tools/check-pacman-chart-equivalence.sh donor-chart "$CHART_DIR"
+      - name: Verify editable candidate chart and immutable migration baseline
+        env:
+          PACMAN_MIGRATION_BASELINE_REPO: migration-baseline
+          PACMAN_PINNED_SOURCE_REPO: donor-chart
+          PACMAN_CANDIDATE_CHART: charts/pacman
+        run: node --test test/pacman-chart-migration-baseline.test.js
 
       - name: Verify single chart publishing authority
         run: bash tools/check-pacman-publisher-authority.sh
