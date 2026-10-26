@@ -268,6 +268,36 @@ resource_policy() {
     | python3 -c 'import json, sys; print(json.load(sys.stdin).get("metadata", {}).get("annotations", {}).get("helm.sh/resource-policy", ""))'
 }
 
+wait_for_owned_pod_deletion() {
+  local namespace="$1"
+  local release="$2"
+  local selector="app.kubernetes.io/instance=$release"
+  local remaining_pods
+
+  if ! remaining_pods="$(kubectl --kubeconfig "$tmp_dir/kubeconfig" -n "$namespace" \
+    get pods -l "$selector" -o name)"; then
+    echo "could not query owned pods before uninstall wait for $release" >&2
+    return 1
+  fi
+  [[ -n "$remaining_pods" ]] || return 0
+
+  if kubectl --kubeconfig "$tmp_dir/kubeconfig" -n "$namespace" \
+    wait --for=delete pods -l "$selector" --timeout=2m; then
+    return 0
+  fi
+
+  if ! remaining_pods="$(kubectl --kubeconfig "$tmp_dir/kubeconfig" -n "$namespace" \
+    get pods -l "$selector" -o name)"; then
+    echo "could not query owned pods after uninstall wait for $release" >&2
+    return 1
+  fi
+  if [[ -n "$remaining_pods" ]]; then
+    echo "owned pods remain after helm uninstall for $release" >&2
+    return 1
+  fi
+  return 0
+}
+
 wait_workloads() {
   local namespace="$1"
   local release="$2"
@@ -514,6 +544,7 @@ run_mode() {
 
   helm uninstall "$release" --kubeconfig "$tmp_dir/kubeconfig" \
     --namespace "$namespace" --wait --timeout 2m
+  wait_for_owned_pod_deletion "$namespace" "$release"
   local resource
   for resource in deployments services pods configmaps jobs serviceaccounts; do
     if kubectl --kubeconfig "$tmp_dir/kubeconfig" -n "$namespace" \
