@@ -57,6 +57,19 @@ dump_diagnostics() {
     get pods,deployments,services,jobs,persistentvolumeclaims -o wide >&2 2>/dev/null || true
   kubectl --kubeconfig "$tmp_dir/kubeconfig" -n "$current_namespace" \
     get events --sort-by=.lastTimestamp >&2 2>/dev/null | tail -n 40 >&2 || true
+  local pod
+  while IFS= read -r pod; do
+    [[ -n "$pod" ]] || continue
+    echo "--- bounded container logs: $pod (current, 60 lines max) ---" >&2
+    kubectl --kubeconfig "$tmp_dir/kubeconfig" -n "$current_namespace" \
+      logs "$pod" --all-containers=true --tail=60 --prefix=true 2>&1 \
+      | python3 -c 'import re,sys; s=sys.stdin.read(); s=re.sub(r"(?i)((?:password|passwd|pwd|token|secret|authorization)[=:][\" ]?)[^,;\s\"}]+", r"\1[redacted]", s); s=re.sub(r"(?i)(mongodb(?:\+srv)?|postgres(?:ql)?)(://)[^@\s]+@", r"\1\2[redacted]@", s); sys.stdout.write(s)' >&2 || true
+    echo "--- bounded container logs: $pod (previous, 60 lines max) ---" >&2
+    kubectl --kubeconfig "$tmp_dir/kubeconfig" -n "$current_namespace" \
+      logs "$pod" --all-containers=true --previous=true --tail=60 --prefix=true 2>&1 \
+      | python3 -c 'import re,sys; s=sys.stdin.read(); s=re.sub(r"(?i)((?:password|passwd|pwd|token|secret|authorization)[=:][\" ]?)[^,;\s\"}]+", r"\1[redacted]", s); s=re.sub(r"(?i)(mongodb(?:\+srv)?|postgres(?:ql)?)(://)[^@\s]+@", r"\1\2[redacted]@", s); sys.stdout.write(s)' >&2 || true
+  done < <(kubectl --kubeconfig "$tmp_dir/kubeconfig" -n "$current_namespace" \
+    get pods -l "app.kubernetes.io/instance=$current_namespace" -o name 2>/dev/null || true)
 }
 
 stop_watch() {
