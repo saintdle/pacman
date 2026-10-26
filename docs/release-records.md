@@ -80,3 +80,20 @@ releases use a separate verified legacy reader for the original three-field
 metadata plus the image digest in the release body; the workflow verifies that
 digest against the published image before dispatch. Legacy records do not
 claim platform, provenance or signature evidence that was not recorded.
+
+## Recovering a release stopped after an image push
+
+The app workflow checks the Docker Hub version tag before publishing a new
+release. If a run stopped after an image push but before creating its GitHub
+release, a retry will stop when that version tag already exists. It will not
+replace the version tag, move `latest`, create a release, or dispatch chart
+promotion. A registry authentication, network, rate-limit, or other ambiguous
+response also stops publication; only a verified manifest-not-found response
+allows the workflow to continue.
+
+For a stopped release, inspect the failed run and retain its source commit and
+any image digest shown by completed steps. Do not delete, retag, or overwrite
+the image, and do not retry publication after changing registry tag settings.
+Ask the release maintainer to decide the next recovery action after checking
+the immutable image identity and its available release evidence. This guard
+does not infer that an occupied tag belongs to the retrying source commit.

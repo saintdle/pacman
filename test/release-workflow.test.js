@@ -53,6 +53,14 @@ function assertReleaseWorkflowFailClosed(workflow) {
   assert.match(policyStep, /APP_RELEASE_ELIGIBLE: \$\{\{ steps\.version\.outputs\.app_release_eligible \}\}/);
   assert.match(policyStep, /run: node tools\/release-policy\.js/);
 
+  const imageTagGuard = /- name: Ensure release image version is unused\n([\s\S]*?)(?=\n\s{6}- name:|$)/.exec(releaseJob)?.[1];
+  assert.ok(imageTagGuard, 'new version publication must check Docker Hub first');
+  assert.match(imageTagGuard, /if: steps\.policy\.outputs\.publish == 'true'/, 'replays must skip the new-publication guard');
+  assert.match(imageTagGuard, /VERSION_TAG: \$\{\{ steps\.version\.outputs\.version \}\}/);
+  assert.match(imageTagGuard, /DOCKERHUB_USERNAME: \$\{\{ secrets\.DOCKERHUB_USERNAME \}\}/);
+  assert.match(imageTagGuard, /DOCKERHUB_TOKEN: \$\{\{ secrets\.DOCKERHUB_TOKEN \}\}/);
+  assert.match(imageTagGuard, /run: node tools\/guard-release-image-version\.js/);
+
   assert.match(releaseJob, /Build and publish multi-architecture image\n\s+id: build\n\s+if: steps\.policy\.outputs\.publish == 'true'/);
   assert.match(releaseJob, /Create GitHub release\n\s+if: steps\.policy\.outputs\.create_release == 'true'/);
   assert.match(releaseJob, /Dispatch Helm chart promotion\n\s+if: steps\.policy\.outputs\.dispatch == 'true' && steps\.image\.outcome == 'success'/);
@@ -68,6 +76,8 @@ function assertReleaseWorkflowFailClosed(workflow) {
   assert.match(releaseJob, /app_record_ref: \$app_record_ref, app_record_sha256: \$app_record_sha256/);
   assert.doesNotMatch(releaseJob, /gh release upload|--clobber/, 'release replay must not replace immutable assets');
   const stepOrder = [
+    'Ensure release image version is unused',
+    'Build and publish multi-architecture image',
     'Sign published image digest',
     'Resolve immutable app release record',
     'Write release metadata',
@@ -75,7 +85,7 @@ function assertReleaseWorkflowFailClosed(workflow) {
     'Dispatch Helm chart promotion',
   ].map((name) => releaseJob.indexOf(`- name: ${name}`));
   assert.ok(stepOrder.every((index) => index >= 0), 'record and release steps must all be present');
-  assert.deepEqual(stepOrder, [...stepOrder].sort((left, right) => left - right), 'records follow successful signing and precede release publication and dispatch');
+  assert.deepEqual(stepOrder, [...stepOrder].sort((left, right) => left - right), 'the version guard precedes image publication, then records follow signing and precede release publication and dispatch');
   assert.doesNotMatch(releaseJob, /if:.*always\(\)/, 'release side effects must not override policy outputs with always()');
   assert.deepEqual([...jobs.keys()].sort(), ['release', 'validate']);
   return releaseJob;
