@@ -13,7 +13,17 @@ const event = {
   },
 };
 
-function candidateApi({ value = 'pacman', candidateSha = sourceCommit, candidate = true } = {}) {
+function candidateApi({
+  value = 'pacman',
+  candidateSha = sourceCommit,
+  candidateId = 147,
+  candidatePath = '.github/workflows/chart-ci.yml',
+  candidateBranch = 'main',
+  candidateEvent = 'push',
+  candidateStatus = 'completed',
+  candidateConclusion = 'success',
+  candidate = true,
+} = {}) {
   return async (url) => {
     if (url.endsWith('/actions/variables?per_page=1')) return { ok: true, status: 200 };
     if (url.includes('/actions/variables/PACMAN_CHART_PUBLISHER_AUTHORITY')) {
@@ -24,13 +34,13 @@ function candidateApi({ value = 'pacman', candidateSha = sourceCommit, candidate
         ok: true,
         status: 200,
         json: async () => ({ workflow_runs: candidate ? [{
-          id: 147,
+          id: candidateId,
           head_sha: candidateSha,
-          head_branch: 'main',
-          event: 'push',
-          status: 'completed',
-          conclusion: 'success',
-          path: '.github/workflows/chart-ci.yml',
+          head_branch: candidateBranch,
+          event: candidateEvent,
+          status: candidateStatus,
+          conclusion: candidateConclusion,
+          path: candidatePath,
         }] : [] }),
       };
     }
@@ -38,9 +48,15 @@ function candidateApi({ value = 'pacman', candidateSha = sourceCommit, candidate
   };
 }
 
-test('chart artifact candidate requires an exact successful main chart-ci run', async () => {
-  const valid = await validatePacmanChartCandidate({ event, token: 'fixture', fetch: candidateApi() });
-  assert.deepEqual(valid, { active: true, authority: 'pacman', sourceCommit, runId: '147' });
+test('chart artifact candidate accepts exact GitHub main workflow identities and verifies the successful main push run', async () => {
+  for (const candidatePath of [
+    '.github/workflows/chart-ci.yml',
+    '.github/workflows/chart-ci.yml@main',
+    '.github/workflows/chart-ci.yml@refs/heads/main',
+  ]) {
+    const valid = await validatePacmanChartCandidate({ event, token: 'fixture', fetch: candidateApi({ candidatePath }) });
+    assert.deepEqual(valid, { active: true, authority: 'pacman', sourceCommit, runId: '147' });
+  }
 
   await assert.rejects(validatePacmanChartCandidate({
     event, token: 'fixture', fetch: candidateApi({ candidateSha: 'b'.repeat(40) }),
@@ -48,6 +64,38 @@ test('chart artifact candidate requires an exact successful main chart-ci run', 
   await assert.rejects(validatePacmanChartCandidate({
     event, token: 'fixture', fetch: candidateApi({ candidate: false }),
   }), /no successful chart-ci\.yml run exists/);
+  for (const candidatePath of [
+    '.github/workflows/other.yml',
+    '.github/workflows/chart-ci.yml@feature',
+    '.github/workflows/chart-ci.yml@refs/heads/feature',
+    '.github/workflows/chart-ci.yml@refs/tags/main',
+    '.github/workflows/chart-ci.yml@main/extra',
+    '.github/workflows/chart-ci.yml@@main',
+  ]) {
+    await assert.rejects(validatePacmanChartCandidate({
+      event, token: 'fixture', fetch: candidateApi({ candidatePath }),
+    }), /no successful chart-ci\.yml run exists/);
+  }
+  for (const changed of [
+    { candidateId: 148 },
+    { candidateBranch: 'feature' },
+    { candidateEvent: 'pull_request' },
+    { candidateStatus: 'in_progress' },
+    { candidateConclusion: 'failure' },
+  ]) {
+    await assert.rejects(validatePacmanChartCandidate({
+      event, token: 'fixture', fetch: candidateApi(changed),
+    }), /no successful chart-ci\.yml run exists/);
+  }
+  for (const workflowRun of [
+    { ...event.workflow_run, head_branch: 'feature' },
+    { ...event.workflow_run, event: 'pull_request' },
+    { ...event.workflow_run, conclusion: 'failure' },
+  ]) {
+    await assert.rejects(validatePacmanChartCandidate({
+      event: { workflow_run: workflowRun }, token: 'fixture', fetch: candidateApi(),
+    }), /workflow_run must be a successful push/);
+  }
 });
 
 test('legacy authority skips candidate publication work', async () => {

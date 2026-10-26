@@ -89,8 +89,11 @@ async function verifyCandidateRun({ sourceCommit, event, token, fetch: fetchRequ
   const candidate = result.workflow_runs?.find((run) => (!workflowRun || run.id === workflowRun.id)
     && run.head_sha === sourceCommit && run.head_branch === 'main' && run.event === 'push'
     && run.status === 'completed' && run.conclusion === 'success'
-    && (run.path === '.github/workflows/chart-ci.yml'
-      || run.path === '.github/workflows/chart-ci.yml@refs/heads/main'));
+    && [
+      '.github/workflows/chart-ci.yml',
+      '.github/workflows/chart-ci.yml@main',
+      '.github/workflows/chart-ci.yml@refs/heads/main',
+    ].includes(run.path));
   if (!candidate) fail(`no successful chart-ci.yml run exists for exact pacman SHA ${sourceCommit} on main`);
   return { sourceCommit, runId: String(candidate.id), ref: 'refs/heads/main', conclusion: 'success' };
 }
