@@ -27,6 +27,8 @@ kind: PersistentVolumeClaim
 metadata:
   name: {{ include "pacman.mongo.fullname" . }}
   namespace: {{ .Release.Namespace }}
+  annotations:
+    "helm.sh/resource-policy": keep
   labels:
     {{- include "pacman.mongo.labels" $ | nindent 4 }}
 spec:

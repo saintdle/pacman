@@ -6,6 +6,8 @@ kind: PersistentVolumeClaim
 metadata:
   name: {{ include "pacman.postgres.fullname" . }}
   namespace: {{ .Release.Namespace }}
+  annotations:
+    "helm.sh/resource-policy": keep
   labels:
     {{- include "pacman.postgres.labels" $ | nindent 4 }}
 spec:

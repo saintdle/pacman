@@ -79,14 +79,14 @@ Deployment and Service, so east-west API traffic flows between separate services
 backends automatically via `SCORE_SERVICE_URL`/`USER_SERVICE_URL`.
 
 ```bash
-helm install pacman infra-charts/pacman --set roles.enabled=true
+helm install pacman veducate/pacman --set roles.enabled=true
 ```
 
 An optional load generator (`node tools/simulate-users.js`) drives gameplay
 traffic through the frontend Service:
 
 ```bash
-helm install pacman infra-charts/pacman \
+helm install pacman veducate/pacman \
   --set roles.enabled=true \
   --set simulator.enabled=true
 ```
@@ -125,9 +125,11 @@ docker build -f docker/Dockerfile \
   .
 ```
 
-Load that image into the kind cluster. In the root of your helm-charts source
-checkout, create `local-fault-demo.yaml` with the image overrides below and the
-demo settings shown later in this section. Create the nonempty token Secret
+Load the image into the kind cluster. From the matching Pac-Man application
+source checkout (`saintdle/pacman`), create `local-fault-demo.yaml` in the
+repository root. The chart is in `charts/pacman`; use that checkout as the
+editable source. Add the image overrides below and the demo settings shown
+later in this section. Create the nonempty token Secret
 described below before running the Helm upgrade:
 
 ```bash
@@ -303,7 +305,7 @@ The chart auto-detects OpenShift (it probes for the
 `restricted-v2` SCC. No configuration is required:
 
 ```bash
-helm install pacman infra-charts/pacman
+helm install pacman veducate/pacman
 ```
 
 Override the detection with `openShift.enabled`:
@@ -316,7 +318,7 @@ If you would rather keep the chart's fixed UIDs, grant the workloads the
 `nonroot-v2` SCC instead by creating a RoleBinding:
 
 ```bash
-helm install pacman infra-charts/pacman \
+helm install pacman veducate/pacman \
   --set openShift.sccRoleBinding.create=true
 ```
 
@@ -334,26 +336,48 @@ Secret. Expected keys:
   `database-user`, `database-password`
 - Postgres: `username`, `password`, `database`
 
-## Upgrading to 0.7.0
+## Upgrading older chart releases
 
-0.7.0 gives each workload a distinct `app.kubernetes.io/name` (previously every
-pod shared `pacman`). A Deployment's label selector is immutable, so an
-in-place `helm upgrade` from an earlier version is rejected by the API server.
-Uninstall and reinstall instead:
+Chart 0.7.0 gave each workload a distinct `app.kubernetes.io/name`, which made
+an in-place upgrade from earlier charts fail because Deployment selectors are
+immutable. The historical uninstall-and-reinstall workaround can delete data:
+public chart 0.7.17 and earlier did not mark database PVCs or chart-generated
+credential Secrets for retention. A newer chart cannot add annotations to
+objects after the older Helm release has already been uninstalled.
+
+If an older release cannot be upgraded in place, take and verify a backup or
+migration of both the database PVC data and its chart-generated Secret before
+uninstalling. Restore both before reinstalling. Do not rely on uninstall alone
+to preserve either resource.
+
+## Database retention and uninstall
+
+The corrected chart source declares version 0.7.19; the legacy-to-App source
+sequence reserves 0.7.18 for the legacy chart and 0.7.19 for the
+later App source. A version is usable only after its package is published and
+listed in the Helm repository index.
+
+The chart-generated database PVC and credential Secret carry Helm's keep
+policy. Uninstalling a release with that policy leaves both objects in the
+namespace. Reinstall with the same release name and namespace to reuse the
+stored data and credentials. Existing credential data takes precedence over
+changed `auth` values. A Secret named through `mongo.existingSecret` or
+`postgres.existingSecret` remains user-managed and is never rendered or
+retained by the chart.
 
 ```bash
 helm uninstall pacman --namespace pacman-demo
 helm install pacman veducate/pacman --namespace pacman-demo
 ```
 
-The Mongo and Postgres PVCs are retained across an uninstall, so high scores
-survive the reinstall.
-
-## Uninstall
+For the default `pacman` release, remove only the generated database objects
+with:
 
 ```bash
-helm uninstall pacman --namespace pacman-demo
-# Mongo / Postgres PVCs are intentionally left behind so high scores survive
-# a reinstall. Delete them explicitly to wipe the data:
-kubectl -n pacman-demo delete pvc -l app.kubernetes.io/instance=pacman
+kubectl -n pacman-demo delete pvc pacman-mongo pacman-postgres --ignore-not-found
+kubectl -n pacman-demo delete secret pacman-mongo pacman-postgres --ignore-not-found
 ```
+
+Use the exact resource names for a different release or `fullnameOverride`.
+Deleting the namespace also removes retained objects and every other resource
+in that namespace.

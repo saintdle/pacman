@@ -32,6 +32,12 @@ Source promotion opens or updates a reviewable pull request; it does not
 publish the package. The live `helm-charts` publisher creates and verifies the
 chart release and Pages index.
 
+The database-retention correction keeps the public version axis monotonic:
+`0.7.18` is assigned to the legacy chart source first, and `0.7.19` is assigned
+to the Pac-Man source for the later publisher cutover. These are source-version
+assignments, not evidence that either package has been published. The current
+public package remains `0.7.17` until the repository index proves otherwise.
+
 Publisher rollout has separately approved expansion, switch, verification,
 and rollback checkpoints. Before each merge, review the exact head and checks,
 and explicitly approve any publication effect: merging to `main` can trigger

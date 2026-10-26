@@ -196,14 +196,16 @@ mongo:
     fsGroup: 999
     seccompProfile:
       type: RuntimeDefault
-  # -- Provide non-empty values (or use existingSecret) before installing.
+  # -- Seed the chart-managed Secret on first install. Existing Helm-managed
+  # credentials are reused on upgrades and reinstalls; use existingSecret for
+  # user-managed credentials or intentional rotation.
   auth:
     rootUsername: "clyde"
     rootPassword: "clyde"
     databaseName: "pacman"
     databaseUser: "blinky"
     databasePassword: "pinky"
-  # -- Reference an existing Secret holding the same keys instead of values.
+  # -- Reference an existing, user-managed Secret holding the same keys instead of values.
   # Expected keys: database-admin-name, database-admin-password,
   # database-name, database-user, database-password.
   existingSecret: ""
@@ -257,10 +259,14 @@ postgres:
     fsGroup: 999
     seccompProfile:
       type: RuntimeDefault
+  # -- Seed the chart-managed Secret on first install. Existing Helm-managed
+  # credentials are reused on upgrades and reinstalls; use existingSecret for
+  # user-managed credentials or intentional rotation.
   auth:
     username: "pacman"
     password: "pinky"
     database: "pacman"
+  # -- Reference an existing, user-managed Secret holding the same keys instead of values.
   existingSecret: ""
   persistence:
     enabled: true

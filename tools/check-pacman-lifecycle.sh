@@ -15,6 +15,17 @@ case "$database" in
   *) echo "unsupported database backend: $database" >&2; exit 2 ;;
 esac
 
+existing_secret_key="$database.existingSecret"
+rendered_existing_secret="$(helm template lifecycle-existing-secret "$chart_dir" \
+  --namespace lifecycle-contract --set "database=$database" \
+  --set "$existing_secret_key=pacman-user-owned-credentials")"
+if grep -q '^kind: Secret$' <<<"$rendered_existing_secret"; then
+  echo "$database existingSecret unexpectedly rendered a chart-owned Secret" >&2
+  exit 1
+fi
+unset rendered_existing_secret
+echo "$database existingSecret remains user-managed"
+
 candidate_sha_actual="$(git -C "$candidate_dir" rev-parse HEAD)"
 candidate_sha="$candidate_sha_actual"
 if [[ -n "${GITHUB_SHA:-}" && "$candidate_sha" != "$GITHUB_SHA" ]]; then
@@ -229,6 +240,21 @@ secret_fingerprint() {
     | python3 -c 'import hashlib, json, sys; print(hashlib.sha256(json.dumps(json.load(sys.stdin)["data"], sort_keys=True).encode()).hexdigest())'
 }
 
+resource_uid() {
+  local resource="$1"
+  local namespace="$2"
+  local name="$3"
+  kubectl --kubeconfig "$tmp_dir/kubeconfig" -n "$namespace" get "$resource" "$name" -o jsonpath='{.metadata.uid}'
+}
+
+resource_policy() {
+  local resource="$1"
+  local namespace="$2"
+  local name="$3"
+  kubectl --kubeconfig "$tmp_dir/kubeconfig" -n "$namespace" get "$resource" "$name" -o json \
+    | python3 -c 'import json, sys; print(json.load(sys.stdin).get("metadata", {}).get("annotations", {}).get("helm.sh/resource-policy", ""))'
+}
+
 wait_workloads() {
   local namespace="$1"
   local release="$2"
@@ -333,6 +359,28 @@ write_values() {
   local mode="$1"
   local roles_enabled="$2"
   local phase="$3"
+  local mongo_root_username=ci-root
+  local mongo_root_password=ci-root-pass
+  local mongo_database_user=ci-pacman
+  local mongo_database_password=ci-pacman-pass
+  local postgres_username=ci-pacman
+  local postgres_password=ci-pacman-pass
+  if [[ "$phase" == upgrade ]]; then
+    mongo_root_username=ci-root-upgrade
+    mongo_root_password=ci-root-pass-upgrade
+    mongo_database_user=ci-pacman-upgrade
+    mongo_database_password=ci-pacman-pass-upgrade
+    postgres_username=ci-pacman-upgrade
+    postgres_password=ci-pacman-pass-upgrade
+  fi
+  if [[ "$phase" == reinstall ]]; then
+    mongo_root_username=ci-root-reset
+    mongo_root_password=ci-root-pass-reset
+    mongo_database_user=ci-pacman-reset
+    mongo_database_password=ci-pacman-pass-reset
+    postgres_username=ci-pacman-reset
+    postgres_password=ci-pacman-pass-reset
+  fi
   cat >"$tmp_dir/values-${mode}-${phase}.yaml" <<YAML
 database: ${database}
 image:
@@ -352,18 +400,18 @@ podAnnotations:
   lifecycle-check: ${phase}
 mongo:
   auth:
-    rootUsername: ci-root
-    rootPassword: ci-root-pass
+    rootUsername: ${mongo_root_username}
+    rootPassword: ${mongo_root_password}
     databaseName: pacman
-    databaseUser: ci-pacman
-    databasePassword: ci-pacman-pass
+    databaseUser: ${mongo_database_user}
+    databasePassword: ${mongo_database_password}
   persistence:
     enabled: true
     storageClass: local-path
 postgres:
   auth:
-    username: ci-pacman
-    password: ci-pacman-pass
+    username: ${postgres_username}
+    password: ${postgres_password}
     database: pacman
   persistence:
     enabled: true
@@ -385,7 +433,10 @@ run_mode() {
   local job_name
   job_name="$(migration_job_name "$release_fullname")"
   local initial_migration_pod=""
+  local upgrade_migration_pod=""
   local watch_file="$tmp_dir/${role_mode}-install-events.json"
+  local pvc_name
+  pvc_name="$release_fullname-$database"
 
   kubectl --kubeconfig "$tmp_dir/kubeconfig" create namespace "$namespace" >/dev/null
   write_values "$role_mode" "$roles_enabled" install
@@ -426,7 +477,6 @@ run_mode() {
   }
   assert_database_sentinel "$namespace" true
   if [[ "$database" == postgres ]]; then
-    local upgrade_migration_pod
     upgrade_migration_pod="$(MIGRATION_JOB_NAME="$job_name" assert_migration_pod \
       "$namespace" "$job_name" "$watch_file" "$initial_migration_pod")"
     [[ "$upgrade_migration_pod" != "$initial_migration_pod" ]] || {
@@ -436,24 +486,107 @@ run_mode() {
     assert_migrations "$namespace"
   fi
 
+  local pvc_uid_before_uninstall
+  local secret_uid_before_uninstall
+  pvc_uid_before_uninstall="$(resource_uid pvc "$namespace" "$pvc_name")"
+  secret_uid_before_uninstall="$(resource_uid secret "$namespace" "$secret_name")"
+  [[ "$(resource_policy pvc "$namespace" "$pvc_name")" == keep ]] || {
+    echo "$database PVC is missing Helm's keep policy before uninstall" >&2
+    exit 1
+  }
+  [[ "$(resource_policy secret "$namespace" "$secret_name")" == keep ]] || {
+    echo "$database generated Secret is missing Helm's keep policy before uninstall" >&2
+    exit 1
+  }
+
   helm uninstall "$release" --kubeconfig "$tmp_dir/kubeconfig" \
     --namespace "$namespace" --wait --timeout 2m
   local resource
-  for resource in deployments services pods persistentvolumeclaims secrets configmaps jobs serviceaccounts; do
+  for resource in deployments services pods configmaps jobs serviceaccounts; do
     if kubectl --kubeconfig "$tmp_dir/kubeconfig" -n "$namespace" \
       get "$resource" -l "app.kubernetes.io/instance=$release" -o name | grep -q .; then
       echo "owned $resource remain after helm uninstall for $release" >&2
       exit 1
     fi
   done
+  local retained_resources
+  local expected_retained_resources
+  retained_resources="$(kubectl --kubeconfig "$tmp_dir/kubeconfig" -n "$namespace" \
+    get pvc,secret -l "app.kubernetes.io/instance=$release" -o name | LC_ALL=C sort)"
+  expected_retained_resources="$(printf 'persistentvolumeclaim/%s\nsecret/%s\n' "$pvc_name" "$secret_name" | LC_ALL=C sort)"
+  [[ "$retained_resources" == "$expected_retained_resources" ]] || {
+    echo "unexpected resources remained after Helm uninstall for $release" >&2
+    exit 1
+  }
+  [[ "$(kubectl --kubeconfig "$tmp_dir/kubeconfig" -n "$namespace" get pvc "$pvc_name" -o name)" == "persistentvolumeclaim/$pvc_name" ]] || {
+    echo "$database PVC was not retained after Helm uninstall" >&2
+    exit 1
+  }
+  [[ "$(kubectl --kubeconfig "$tmp_dir/kubeconfig" -n "$namespace" get secret "$secret_name" -o name)" == "secret/$secret_name" ]] || {
+    echo "$database generated Secret was not retained after Helm uninstall" >&2
+    exit 1
+  }
+  [[ "$(resource_uid pvc "$namespace" "$pvc_name")" == "$pvc_uid_before_uninstall" ]] || {
+    echo "$database PVC identity changed across Helm uninstall" >&2
+    exit 1
+  }
+  [[ "$(resource_uid secret "$namespace" "$secret_name")" == "$secret_uid_before_uninstall" ]] || {
+    echo "$database Secret identity changed across Helm uninstall" >&2
+    exit 1
+  }
+  [[ "$(secret_fingerprint "$namespace" "$secret_name")" == "$secret_before" ]] || {
+    echo "$database credentials changed during Helm uninstall" >&2
+    exit 1
+  }
+
   if kubectl --kubeconfig "$tmp_dir/kubeconfig" \
     get clusterroles,clusterrolebindings -l "app.kubernetes.io/instance=$release" -o name | grep -q .; then
     echo "owned cluster-scoped RBAC resources remain after helm uninstall for $release" >&2
     exit 1
   fi
+
+  write_values "$role_mode" "$roles_enabled" reinstall
+  watch_file="$tmp_dir/$role_mode-reinstall-events.json"
+  if [[ "$database" == postgres ]]; then
+    start_migration_watch "$namespace" "$watch_file"
+  fi
+  helm upgrade --install "$release" "$chart_dir" \
+    --kubeconfig "$tmp_dir/kubeconfig" --namespace "$namespace" \
+    --values "$tmp_dir/values-$role_mode-reinstall.yaml" \
+    --wait --timeout 6m
+  wait_workloads "$namespace" "$release" "$role_mode"
+  assert_role_images "$namespace" "$release" "$role_mode"
+  [[ "$(resource_uid pvc "$namespace" "$pvc_name")" == "$pvc_uid_before_uninstall" ]] || {
+    echo "$database PVC identity changed during reinstall" >&2
+    exit 1
+  }
+  [[ "$(resource_uid secret "$namespace" "$secret_name")" == "$secret_uid_before_uninstall" ]] || {
+    echo "$database Secret identity changed during reinstall" >&2
+    exit 1
+  }
+  [[ "$(secret_fingerprint "$namespace" "$secret_name")" == "$secret_before" ]] || {
+    echo "$database credentials were reset by new values during reinstall" >&2
+    exit 1
+  }
+  assert_database_sentinel "$namespace" true
+  if [[ "$database" == postgres ]]; then
+    local reinstall_migration_pod
+    reinstall_migration_pod="$(MIGRATION_JOB_NAME="$job_name" assert_migration_pod \
+      "$namespace" "$job_name" "$watch_file" "$upgrade_migration_pod")"
+    [[ "$reinstall_migration_pod" != "$upgrade_migration_pod" ]] || {
+      echo "PostgreSQL post-install hook did not create a new migration pod after reinstall" >&2
+      exit 1
+    }
+    assert_migrations "$namespace"
+  fi
+
   kubectl --kubeconfig "$tmp_dir/kubeconfig" delete namespace "$namespace" \
     --wait=true --timeout=2m
-  echo "$database/$role_mode install, upgrade, identity, credentials, data, and cleanup passed"
+  if kubectl --kubeconfig "$tmp_dir/kubeconfig" get namespace "$namespace" >/dev/null 2>&1; then
+    echo "owned lifecycle namespace was not removed after retained-resource cleanup: $namespace" >&2
+    exit 1
+  fi
+  echo "$database/$role_mode install, upgrade, uninstall, reinstall, identity, credentials, data, and cleanup passed"
   current_namespace=""
 }
 
