@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,6 +14,12 @@ const imageName = 'docker.io/saintdle/pacman';
 
 function git(directory, ...args) {
   return execFileSync('git', args, { cwd: directory, encoding: 'utf8' }).trim();
+}
+
+function childEnv(extra = {}) {
+  const env = { ...process.env, ...extra };
+  delete env.GITHUB_OUTPUT;
+  return env;
 }
 
 function createRepository() {
@@ -58,13 +64,12 @@ function resolverResult(directory, sha, base) {
   return spawnSync(process.execPath, [resolver], {
     cwd: directory,
     encoding: 'utf8',
-    env: {
-      ...process.env,
+    env: childEnv({
       GITHUB_SHA: sha,
       GITHUB_EVENT_NAME: 'push',
       RELEASE_BASE_SHA: base,
       RELEASE_BUMP: '',
-    },
+    }),
   });
 }
 
@@ -76,19 +81,29 @@ test('a tag left behind after the image push blocks the missing GitHub release-t
     assert.match(resolved.stdout, /^version=0\.7\.8$/m);
     assert.match(resolved.stdout, /^existing_release=false$/m);
 
+    const policyEnv = {
+      RELEASE_VALIDATION_RESULT: 'success',
+      APP_RELEASE_ELIGIBLE: 'true',
+      EXISTING_RELEASE: 'false',
+      RELEASE_VERSION: '0.7.8',
+      LATEST_RELEASE: '0.7.7',
+    };
     const plan = spawnSync(process.execPath, [policy], {
       encoding: 'utf8',
-      env: {
-        ...process.env,
-        RELEASE_VALIDATION_RESULT: 'success',
-        APP_RELEASE_ELIGIBLE: 'true',
-        EXISTING_RELEASE: 'false',
-        RELEASE_VERSION: '0.7.8',
-        LATEST_RELEASE: '0.7.7',
-      },
+      env: childEnv(policyEnv),
     });
     assert.equal(plan.status, 0, plan.stderr);
     assert.match(plan.stdout, /^publish=true$/m);
+
+    const outputPath = join(directory, 'github-output.txt');
+    writeFileSync(outputPath, '');
+    const hostedPlan = spawnSync(process.execPath, [policy], {
+      encoding: 'utf8',
+      env: { ...childEnv(policyEnv), GITHUB_OUTPUT: outputPath },
+    });
+    assert.equal(hostedPlan.status, 0, hostedPlan.stderr);
+    assert.equal(hostedPlan.stdout, '');
+    assert.equal(readFileSync(outputPath, 'utf8'), 'verify_image=true\npublish=true\ncreate_release=true\ndispatch=true\n');
 
     const { calls, fetchImpl } = mockFetch(200);
     await assert.rejects(assertReleaseImageTagAbsent({
