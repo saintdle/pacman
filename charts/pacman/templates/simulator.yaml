@@ -1,0 +1,66 @@
+{{- if .Values.simulator.enabled -}}
+{{- $name := "pacman-simulator" -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "pacman.fullname" . }}-simulator
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pacman.labels" (dict "root" $ "name" $name "role" "load-generator") | nindent 4 }}
+spec:
+  replicas: {{ .Values.simulator.replicas }}
+  selector:
+    matchLabels:
+      {{- include "pacman.selectorLabels" (dict "root" $ "name" $name "role" "load-generator") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "pacman.labels" (dict "root" $ "name" $name "role" "load-generator") | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations: {{- include "pacman.demo.annotations" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "pacman.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- include "pacman.podSecurityContext" (dict "root" $ "ctx" .Values.podSecurityContext) | nindent 8 }}
+      containers:
+        - name: simulator
+          image: {{ include "pacman.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["node", "/app/tools/simulate-users.js"]
+          securityContext: {{- toYaml .Values.securityContext | nindent 12 }}
+          env:
+            - name: PACMAN_BASE_URL
+              value: {{ .Values.simulator.baseUrl | default (printf "http://%s:%v" (include "pacman.fullname" .) .Values.service.port) | quote }}
+            - name: USERS
+              value: {{ .Values.simulator.users | quote }}
+            - name: DURATION_SECONDS
+              value: {{ .Values.simulator.durationSeconds | quote }}
+            - name: MIN_THINK_MS
+              value: {{ .Values.simulator.minThinkMs | quote }}
+            - name: MAX_THINK_MS
+              value: {{ .Values.simulator.maxThinkMs | quote }}
+            - name: DEMO_SECURITY_MODE
+              value: {{ .Values.demo.enabled | quote }}
+            - name: DEMO_TOKEN_HEADER
+              value: {{ .Values.demo.tokenHeader | quote }}
+            {{- include "pacman.demo.tokenEnv" . | nindent 12 }}
+            - name: SIM_FAULTS_JSON
+              value: {{ toJson .Values.simulator.faults | quote }}
+            - name: SIM_SECURITY_PROBES_JSON
+              value: {{ toJson .Values.simulator.securityProbes | quote }}
+          resources: {{- toYaml .Values.simulator.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end -}}

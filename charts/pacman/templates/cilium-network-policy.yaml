@@ -1,0 +1,62 @@
+{{- if .Values.ciliumNetworkPolicy.enabled -}}
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ include "pacman.fullname" . }}-score-l7
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pacman.commonLabels" . | nindent 4 }}
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/name: pacman-score
+      app.kubernetes.io/instance: {{ .Release.Name | quote }}
+      app.kubernetes.io/component: score
+  ingress:
+    # App-to-score traffic is limited to the score API. With denyScoreWrites,
+    # omitting POST makes the L7 allow list reject writes without relying on
+    # unsupported HTTP ingressDeny rules.
+    - fromEndpoints:
+        - matchLabels:
+            app.kubernetes.io/name: pacman-frontend
+            app.kubernetes.io/instance: {{ .Release.Name | quote }}
+            app.kubernetes.io/component: frontend
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+          rules:
+            http:
+              - method: GET
+                path: ^/internal/score/read(\?.*)?$
+              {{- if not .Values.ciliumNetworkPolicy.denyScoreWrites }}
+              - method: POST
+                path: ^/internal/score/write$
+              {{- end }}
+    # Preserve kubelet probes; the host source may be represented by Cilium's
+    # reserved host identity.
+    - fromEntities:
+        - host
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+          rules:
+            http:
+              - method: GET
+                path: ^/healthz$
+              - method: GET
+                path: ^/readyz$
+    # Allow Prometheus in the configured namespace to scrape score metrics.
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: {{ .Values.ciliumNetworkPolicy.monitoringNamespace | quote }}
+      toPorts:
+        - ports:
+            - port: "8080"
+              protocol: TCP
+          rules:
+            http:
+              - method: GET
+                path: ^/metrics$
+{{- end -}}

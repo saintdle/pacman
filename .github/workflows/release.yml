@@ -3,13 +3,28 @@ name: Release
 on:
   push:
     branches: [main]
+    paths:
+      - '.dockerignore'
+      - '.nvmrc'
+      - 'charts/pacman/**'
+      - 'docker/Dockerfile'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'proto/**'
+      - 'public/**'
+      - 'src/**'
+      - 'tools/demo-exec-probe.js'
+      - 'tools/healthcheck.js'
+      - 'views/**'
+      - 'demo-fixtures/**'
   workflow_dispatch:
-
-permissions:
-  contents: write
-  issues: write
-  id-token: write
-  attestations: write
+    inputs:
+      release_bump:
+        description: Explicit application version bump
+        type: choice
+        required: true
+        default: patch
+        options: [patch, minor, major]
 
 concurrency:
   group: pacman-release
@@ -19,8 +34,21 @@ env:
   IMAGE_NAME: docker.io/saintdle/pacman
 
 jobs:
+  validate:
+    name: Validate release candidate
+    permissions:
+      contents: read
+      security-events: write
+    uses: ./.github/workflows/ci.yml
+
   release:
     name: Build and publish release
+    needs: validate
+    permissions:
+      contents: write
+      issues: write
+      id-token: write
+      attestations: write
     runs-on: ubuntu-latest
     steps:
       - name: Validate manual release ref
@@ -36,6 +64,7 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0
+          ref: ${{ github.sha }}
 
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -43,20 +72,12 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Run lint
-        run: npm run lint
-
-      - name: Run tests
-        run: npm test
-
       - name: Resolve release version
         id: version
         env:
           GITHUB_SHA: ${{ github.sha }}
           RELEASE_BASE_SHA: ${{ github.event.before || '' }}
+          RELEASE_BUMP: ${{ inputs.release_bump }}
         run: |
           set -euo pipefail
           release_output=$(node tools/resolve-release-version.js)
@@ -65,24 +86,34 @@ jobs:
           source=$(printf '%s\n' "$release_output" | awk -F= '$1 == "source" { print $2 }')
           echo "Publishing Pac-Man $version ($source)"
 
-      - name: Write release metadata
-        if: steps.version.outputs.existing_release != 'true'
+      - name: Gate release effects
+        id: policy
         env:
+          RELEASE_VALIDATION_RESULT: ${{ needs.validate.result }}
+          APP_RELEASE_ELIGIBLE: ${{ steps.version.outputs.app_release_eligible }}
+          EXISTING_RELEASE: ${{ steps.version.outputs.existing_release }}
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          LATEST_RELEASE: ${{ steps.version.outputs.latest_release }}
+        run: node tools/release-policy.js
+
+      - name: Read existing release image digest
+        id: existing
+        if: steps.version.outputs.existing_release == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ steps.version.outputs.tag }}
-          SOURCE_COMMIT: ${{ github.sha }}
         run: |
           set -euo pipefail
-          jq -n \
-            --arg version "$RELEASE_VERSION" \
-            --arg tag "$RELEASE_TAG" \
-            --arg commit "$SOURCE_COMMIT" \
-            '{version: $version, tag: $tag, commit: $commit}' \
-            > release-metadata.json
-          cat release-metadata.json
+          gh release view "$RELEASE_TAG" --json body --jq '.body' > existing-release-body.txt
+          mapfile -t digests < <(grep -Eo 'sha256:[0-9a-f]{64}' existing-release-body.txt || true)
+          if [[ ${#digests[@]} -ne 1 ]]; then
+            echo "Expected exactly one recorded image digest in release $RELEASE_TAG" >&2
+            exit 1
+          fi
+          echo "image_digest=${digests[0]}" >> "$GITHUB_OUTPUT"
 
       - name: Ensure release tag is unused
-        if: steps.version.outputs.existing_release != 'true'
+        if: steps.policy.outputs.publish == 'true'
         env:
           RELEASE_TAG: ${{ steps.version.outputs.tag }}
         run: |
@@ -92,7 +123,17 @@ jobs:
             exit 1
           fi
 
+      - name: Ensure release image version is unused
+        if: steps.policy.outputs.publish == 'true'
+        env:
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
+          VERSION_TAG: ${{ steps.version.outputs.version }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: node tools/guard-release-image-version.js
+
       - name: Log in to Docker Hub
+        if: steps.policy.outputs.publish == 'true'
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: docker.io
@@ -100,14 +141,16 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Set up QEMU
+        if: steps.policy.outputs.publish == 'true'
         uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
 
       - name: Set up Docker Buildx
+        if: steps.policy.outputs.verify_image == 'true'
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Build and publish multi-architecture image
         id: build
-        if: steps.version.outputs.existing_release != 'true'
+        if: steps.policy.outputs.publish == 'true'
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
@@ -125,7 +168,7 @@ jobs:
           sbom: true
 
       - name: Attest published image
-        if: steps.version.outputs.existing_release != 'true'
+        if: steps.policy.outputs.publish == 'true'
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
           subject-name: ${{ env.IMAGE_NAME }}
@@ -134,7 +177,7 @@ jobs:
 
       - name: Scan published image for vulnerabilities
         id: trivy
-        if: steps.version.outputs.existing_release != 'true'
+        if: steps.policy.outputs.publish == 'true'
         continue-on-error: true
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -146,7 +189,7 @@ jobs:
           exit-code: '1'
 
       - name: Open vulnerability issue
-        if: ${{ always() && steps.version.outputs.existing_release != 'true' }}
+        if: steps.policy.outputs.publish == 'true'
         env:
           IMAGE_NAME: ${{ env.IMAGE_NAME }}
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
@@ -210,8 +253,11 @@ jobs:
 
       - name: Verify published manifest list
         id: image
+        if: steps.policy.outputs.verify_image == 'true'
         env:
           VERSION_TAG: ${{ steps.version.outputs.version }}
+          EXISTING_RELEASE: ${{ steps.version.outputs.existing_release }}
+          RELEASE_IMAGE_DIGEST: ${{ steps.existing.outputs.image_digest }}
         run: |
           set -euo pipefail
           inspect_digest() {
@@ -240,33 +286,106 @@ jobs:
             return 1
           }
 
-          if ! version_digest=$(inspect_digest "$IMAGE_NAME:$VERSION_TAG"); then
-            echo "Unable to inspect $IMAGE_NAME:$VERSION_TAG after 5 attempts" >&2
-            exit 1
+          if [[ "$EXISTING_RELEASE" == "true" ]]; then
+            if [[ ! "$RELEASE_IMAGE_DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+              echo "Existing release $VERSION_TAG has no valid recorded image digest" >&2
+              exit 1
+            fi
+            if ! version_digest=$(inspect_digest "$IMAGE_NAME:$VERSION_TAG"); then
+              echo "Unable to inspect $IMAGE_NAME:$VERSION_TAG after 5 attempts" >&2
+              exit 1
+            fi
+            node tools/release-policy.js verify-digest "$RELEASE_IMAGE_DIGEST" "$version_digest"
+            image_digest=$RELEASE_IMAGE_DIGEST
+            echo "Verified existing release $IMAGE_NAME:$VERSION_TAG at recorded digest $image_digest"
+          else
+            if ! version_digest=$(inspect_digest "$IMAGE_NAME:$VERSION_TAG"); then
+              echo "Unable to inspect $IMAGE_NAME:$VERSION_TAG after 5 attempts" >&2
+              exit 1
+            fi
+            if ! latest_digest=$(inspect_digest "$IMAGE_NAME:latest"); then
+              echo "Unable to inspect $IMAGE_NAME:latest after 5 attempts" >&2
+              exit 1
+            fi
+            if [[ "$version_digest" != "$latest_digest" ]]; then
+              echo "Manifest digest mismatch: $IMAGE_NAME:$VERSION_TAG=$version_digest, $IMAGE_NAME:latest=$latest_digest" >&2
+              exit 1
+            fi
+            image_digest=$version_digest
+            echo "Verified $IMAGE_NAME:$VERSION_TAG and $IMAGE_NAME:latest at $image_digest"
           fi
-          if ! latest_digest=$(inspect_digest "$IMAGE_NAME:latest"); then
-            echo "Unable to inspect $IMAGE_NAME:latest after 5 attempts" >&2
-            exit 1
-          fi
-          if [[ "$version_digest" != "$latest_digest" ]]; then
-            echo "Manifest digest mismatch: $IMAGE_NAME:$VERSION_TAG=$version_digest, $IMAGE_NAME:latest=$latest_digest" >&2
-            exit 1
-          fi
-          echo "image_digest=$version_digest" >> "$GITHUB_OUTPUT"
-          echo "Verified $IMAGE_NAME:$VERSION_TAG and $IMAGE_NAME:latest at $version_digest"
+          echo "image_digest=$image_digest" >> "$GITHUB_OUTPUT"
 
       - name: Install Cosign
-        if: steps.version.outputs.existing_release != 'true'
+        if: steps.policy.outputs.publish == 'true'
         uses: sigstore/cosign-installer@d7d6bc7722e3daa8354c50bcb52f4837da5e9b6a # v3.8.1
 
       - name: Sign published image digest
-        if: steps.version.outputs.existing_release != 'true'
+        if: steps.policy.outputs.publish == 'true'
         env:
           IMAGE_DIGEST: ${{ steps.image.outputs.image_digest }}
         run: cosign sign --yes "$IMAGE_NAME@$IMAGE_DIGEST"
 
+      - name: Resolve immutable app release record
+        id: record
+        if: steps.policy.outputs.verify_image == 'true' && steps.image.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EXISTING_RELEASE: ${{ steps.version.outputs.existing_release }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          SOURCE_REPOSITORY: ${{ github.server_url }}/${{ github.repository }}
+          SOURCE_COMMIT: ${{ github.sha }}
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
+          IMAGE_DIGEST: ${{ steps.image.outputs.image_digest }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [[ "$EXISTING_RELEASE" == "true" ]]; then
+            asset_names=$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name')
+            mkdir -p existing-release-record
+            if grep -Fxq 'app-release-record.json' <<< "$asset_names"; then
+              gh release download "$RELEASE_TAG" --pattern 'app-release-record.json' --dir existing-release-record
+              gh release download "$RELEASE_TAG" --pattern 'release-metadata.json' --dir existing-release-record
+              node tools/release-records.js verify-app \
+                existing-release-record/app-release-record.json \
+                existing-release-record/release-metadata.json >> "$GITHUB_OUTPUT"
+            else
+              gh release download "$RELEASE_TAG" --pattern 'release-metadata.json' --dir existing-release-record
+              node tools/release-records.js verify-legacy \
+                existing-release-record/release-metadata.json >> "$GITHUB_OUTPUT"
+            fi
+          else
+            docker buildx imagetools inspect "$IMAGE_NAME@$IMAGE_DIGEST" --raw > image-manifest-list.json
+            node tools/release-records.js write-app image-manifest-list.json app-release-record.json >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Write release metadata
+        if: steps.policy.outputs.publish == 'true'
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          SOURCE_COMMIT: ${{ github.sha }}
+          IMAGE_DIGEST: ${{ steps.image.outputs.image_digest }}
+          APP_RECORD_REFERENCE: ${{ steps.record.outputs.reference }}
+          APP_RECORD_SHA256: ${{ steps.record.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          jq -n \
+            --arg version "$RELEASE_VERSION" \
+            --arg tag "$RELEASE_TAG" \
+            --arg commit "$SOURCE_COMMIT" \
+            --arg image_digest "$IMAGE_DIGEST" \
+            --arg app_record_ref "$APP_RECORD_REFERENCE" \
+            --arg app_record_sha256 "$APP_RECORD_SHA256" \
+            '{version: $version, tag: $tag, commit: $commit, image_digest: $image_digest, app_record_ref: $app_record_ref, app_record_sha256: $app_record_sha256}' \
+            > release-metadata.json
+          cat release-metadata.json
+
       - name: Create GitHub release
-        if: steps.version.outputs.existing_release != 'true'
+        if: steps.policy.outputs.create_release == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ steps.version.outputs.tag }}
@@ -286,15 +405,21 @@ jobs:
           EOF
           gh release create "$RELEASE_TAG" \
             release-metadata.json \
+            app-release-record.json \
             --target "$GITHUB_SHA" \
             --title "Pac-Man $RELEASE_VERSION" \
             --notes-file "$notes"
 
       - name: Dispatch Helm chart promotion
+        if: steps.policy.outputs.dispatch == 'true' && steps.image.outcome == 'success'
         env:
           RELEASE_AUTOMATION_TOKEN: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
           IMAGE_DIGEST: ${{ steps.image.outputs.image_digest }}
+          APP_RECORD_REFERENCE: ${{ steps.record.outputs.reference }}
+          APP_RECORD_SHA256: ${{ steps.record.outputs.sha256 }}
+          APP_RECORD_FORMAT: ${{ steps.record.outputs.format }}
+          APP_RECORD_MISSING_EVIDENCE: ${{ steps.record.outputs.missing_evidence }}
         run: |
           set -euo pipefail
           test -n "$RELEASE_AUTOMATION_TOKEN" || {
@@ -305,7 +430,11 @@ jobs:
             --arg app_version "$RELEASE_VERSION" \
             --arg image_digest "$IMAGE_DIGEST" \
             --arg source_commit "$GITHUB_SHA" \
-            '{event_type: "pacman-release", client_payload: {app_version: $app_version, image_digest: $image_digest, source_commit: $source_commit}}')
+            --arg app_record_ref "$APP_RECORD_REFERENCE" \
+            --arg app_record_sha256 "$APP_RECORD_SHA256" \
+            --arg app_record_format "$APP_RECORD_FORMAT" \
+            --arg app_record_missing_evidence "$APP_RECORD_MISSING_EVIDENCE" \
+            '{event_type: "pacman-release", client_payload: {app_version: $app_version, image_digest: $image_digest, source_commit: $source_commit, app_record_ref: $app_record_ref, app_record_sha256: $app_record_sha256, app_record_format: $app_record_format, app_record_missing_evidence: (if $app_record_missing_evidence == "" then [] else ($app_record_missing_evidence | split(",")) end)}}')
           curl --fail-with-body --silent --show-error \
             -X POST \
             -H "Accept: application/vnd.github+json" \

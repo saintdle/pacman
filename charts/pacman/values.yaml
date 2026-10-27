@@ -1,0 +1,289 @@
+# -- Default values for the pacman chart.
+
+# -- Backend database engine. One of: mongo, postgres.
+database: mongo
+image:
+  # Pinned by digest for reproducibility. Override `tag` to skip the digest.
+  repository: docker.io/saintdle/pacman
+  digest: "sha256:592740129bce7530a347146b86647f8b516df3c19105aa4c2fe40b878840fccf"
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+# -- Override the fully-qualified release name.
+fullnameOverride: ""
+nameOverride: ""
+replicaCount: 1
+# -- Extra environment variables on the pacman container.
+extraEnv: []
+# - name: SOMETHING
+#   value: someValue
+
+# -- Split the single all-in-one frontend into cooperating web/score/user
+# roles, each its own Deployment and Service, so east-west traffic flows
+# between separate services (useful for Cilium/Hubble L7 demos). When disabled
+# (default) the chart deploys one all-in-one frontend. The same container image
+# runs every role; APP_ROLE selects the behaviour. The web role automatically
+# receives SCORE_SERVICE_URL/USER_SERVICE_URL pointing at the backend Services.
+roles:
+  enabled: false
+  score:
+    replicas: 1
+    # -- Defaults to the top-level `resources` when left empty.
+    resources: {}
+  user:
+    replicas: 1
+    # -- Defaults to the top-level `resources` when left empty.
+    resources: {}
+# -- Continuous load generator (runs `node tools/simulate-users.js` from the
+# image) that drives gameplay traffic through the frontend Service. Handy for
+# demos and observability; off by default.
+simulator:
+  enabled: false
+  replicas: 1
+  # -- Target URL. Defaults to the in-cluster frontend Service when empty.
+  baseUrl: ""
+  users: 20
+  # -- 0 runs the simulator forever.
+  durationSeconds: 0
+  minThinkMs: 800
+  maxThinkMs: 3500
+  # Fault and security probe schedules are passed as JSON to the simulator.
+  # Their defaults are inert; demo.enabled and an existing token Secret are
+  # required before either schedule can be enabled.
+  faults:
+    enabled: false
+    seed: 42
+    durationSeconds: 300
+    rules: []
+  securityProbes:
+    enabled: false
+    seed: 42
+    durationSeconds: 300
+    operations: []
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+# -- Opt-in fault and security-probe demo controls. The Secret must contain a
+# `token` key; its value is never rendered into a manifest.
+demo:
+  enabled: false
+  existingTokenSecret: ""
+  tokenHeader: x-demo-token
+  fileProbeEnabled: false
+  execProbeEnabled: false
+
+# -- Optional integrations for demo telemetry and policy demonstrations.
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  labels: {}
+ciliumNetworkPolicy:
+  enabled: false
+  denyScoreWrites: false
+  monitoringNamespace: monitoring
+tetragon:
+  enabled: false
+  fileProbeMode: observe
+  execProbeMode: observe
+service:
+  type: LoadBalancer
+  port: 80
+  # nodePort: 30080      # only used when type=NodePort
+  annotations: {}
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: pacman.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+# -- HTTP probes for Pac-Man application containers. Set either probe's enabled
+# field to false to disable it. Liveness uses the dependency-free /healthz
+# endpoint, while readiness uses /readyz and remains dependency-aware.
+probes:
+  liveness:
+    enabled: true
+    httpGet:
+      path: /healthz
+      port: http
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 6
+  readiness:
+    enabled: true
+    httpGet:
+      path: /readyz
+      port: http
+    initialDelaySeconds: 3
+    periodSeconds: 5
+    timeoutSeconds: 5
+    failureThreshold: 3
+# -- OpenShift integration. The restricted-v2 SCC assigns a random UID from the
+# namespace's range, so on OpenShift the chart drops the fixed
+# runAsUser/runAsGroup/fsGroup from every pod securityContext and lets the
+# platform inject them.
+openShift:
+  # -- true, false, or "auto" (detect the security.openshift.io/v1 API).
+  enabled: auto
+  sccRoleBinding:
+    # -- Keep the fixed UIDs instead and bind each workload's ServiceAccount to
+    # the nonroot-v2 SCC. Requires permission to create RoleBindings to
+    # system:openshift:scc:* ClusterRoles.
+    create: false
+# -- Pod securityContext for the Pac-Man frontend. runAsUser/runAsGroup/fsGroup
+# are dropped automatically on OpenShift (see openShift above).
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 100
+  runAsGroup: 101
+  fsGroup: 101
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+# -- ServiceAccount used by the pacman Deployment. Granted cluster-scoped
+# get/watch/list on pods and nodes (used by the in-app location probe).
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+rbac:
+  # -- Create the ClusterRole and ClusterRoleBinding for the location probe.
+  create: true
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+# -- HorizontalPodAutoscaler for pacman.
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 80
+  # targetMemoryUtilizationPercentage: 80
+# -------- MongoDB (when database=mongo) --------
+mongo:
+  image:
+    repository: mongo
+    tag: "8"
+    pullPolicy: IfNotPresent
+  # -- Pod securityContext for MongoDB. runAsUser/runAsGroup/fsGroup are dropped
+  # automatically on OpenShift (see openShift above).
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 999
+    runAsGroup: 999
+    fsGroup: 999
+    seccompProfile:
+      type: RuntimeDefault
+  # -- Seed the chart-managed Secret on first install. Existing Helm-managed
+  # credentials are reused on upgrades and reinstalls; use existingSecret for
+  # user-managed credentials or intentional rotation.
+  auth:
+    rootUsername: "clyde"
+    rootPassword: "clyde"
+    databaseName: "pacman"
+    databaseUser: "blinky"
+    databasePassword: "pinky"
+  # -- Reference an existing, user-managed Secret holding the same keys instead of values.
+  # Expected keys: database-admin-name, database-admin-password,
+  # database-name, database-user, database-password.
+  existingSecret: ""
+  persistence:
+    enabled: true
+    size: 1Gi
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  service:
+    port: 27017
+  # -- Liveness probe for the MongoDB container. mongosh is a Node.js shell and
+  # can take several seconds to start under CPU contention, so timeoutSeconds
+  # must be generous or the kubelet kills a healthy mongod (which then drops the
+  # Service's only endpoint). Set to {} to disable.
+  livenessProbe:
+    exec:
+      command: ["/bin/sh", "-c", "mongosh --quiet --eval 'db.adminCommand({ ping: 1 }).ok'"]
+    initialDelaySeconds: 30
+    periodSeconds: 30
+    timeoutSeconds: 10
+    failureThreshold: 6
+  # -- Readiness probe for the MongoDB container. The same mongosh startup
+  # caveat as the liveness probe applies. Set to {} to disable.
+  readinessProbe:
+    exec:
+      command: ["/bin/sh", "-c", "mongosh --quiet --eval 'db.adminCommand({ ping: 1 }).ok'"]
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 10
+    failureThreshold: 6
+# -------- PostgreSQL (when database=postgres) --------
+postgres:
+  image:
+    repository: postgres
+    tag: "17-alpine"
+    pullPolicy: IfNotPresent
+  # -- Pod securityContext for PostgreSQL. runAsUser/runAsGroup/fsGroup are
+  # dropped automatically on OpenShift (see openShift above).
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 999
+    runAsGroup: 999
+    fsGroup: 999
+    seccompProfile:
+      type: RuntimeDefault
+  # -- Seed the chart-managed Secret on first install. Existing Helm-managed
+  # credentials are reused on upgrades and reinstalls; use existingSecret for
+  # user-managed credentials or intentional rotation.
+  auth:
+    username: "pacman"
+    password: "pinky"
+    database: "pacman"
+  # -- Reference an existing, user-managed Secret holding the same keys instead of values.
+  existingSecret: ""
+  persistence:
+    enabled: true
+    size: 1Gi
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 1000m
+      memory: 512Mi
+  service:
+    port: 5432
+  # -- Run the PostgreSQL schema migration Job after installs and upgrades.
+  migration:
+    enabled: true
+    backoffLimit: 6

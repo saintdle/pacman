@@ -1,6 +1,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import { gzipSync } from 'node:zlib';
 import request from 'supertest';
 import { MemoryAdapter } from '../src/db/memory.js';
 import { createApp } from '../src/app.js';
@@ -306,6 +307,20 @@ test('POST /highscores accepts a plausible score', async () => {
     .send({ name: 'OK', score: '2840', level: '1' });
   assert.equal(res.status, 200);
   assert.equal(res.body.rs, 'success');
+});
+
+test('POST /highscores accepts a benign gzip-compressed JSON request', async () => {
+  const body = gzipSync(Buffer.from(JSON.stringify({ name: 'GZIP', score: 100, level: 1 })));
+  const res = await request(app)
+    .post('/highscores')
+    .set('Content-Type', 'application/json')
+    .set('Content-Encoding', 'gzip')
+    .serialize((payload) => payload)
+    .send(body);
+  assert.equal(res.status, 200, res.text);
+  assert.equal(res.body.rs, 'success');
+  assert.equal(res.body.score, 100);
+  assert.equal(res.body.level, 1);
 });
 
 test('public and internal score submissions reject invalid values before database writes', async () => {

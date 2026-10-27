@@ -1,0 +1,67 @@
+name: Publish validated Pac-Man chart artifact
+
+on:
+  workflow_run:
+    workflows: [Pac-Man chart CI]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      source_commit:
+        description: Full main commit SHA with a successful chart-ci run (reconcile only)
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: pacman-chart-publisher
+  cancel-in-progress: false
+
+env:
+  HELM_VERSION: v3.16.4
+
+jobs:
+  publish:
+    name: package and notify for the exact validated source
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the trusted publisher implementation
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Confirm authority and exact-SHA chart candidate before source checkout
+        id: candidate
+        env:
+          RELEASE_AUTOMATION_TOKEN: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
+        run: node tools/chart-artifact-source.mjs validate-candidate
+
+      - name: Check out only the validated Pac-Man source SHA
+        if: steps.candidate.outputs.active == 'true'
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ steps.candidate.outputs.source_commit }}
+          path: pacman-source
+          persist-credentials: false
+
+      - name: Set up Helm
+        if: steps.candidate.outputs.active == 'true'
+        uses: azure/setup-helm@v5
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Package, verify, and dispatch the immutable chart artifact
+        if: steps.candidate.outputs.active == 'true'
+        env:
+          RELEASE_AUTOMATION_TOKEN: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
+          PACMAN_CHART_SOURCE_ROOT: pacman-source
+        run: node tools/chart-artifact-source.mjs publish

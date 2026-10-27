@@ -41,15 +41,40 @@ async function waitForRuntimeHealth(name, port) {
   throw new Error(`${name} did not serve /healthz and pass its image healthcheck (status: ${health})`);
 }
 
-async function smokeImage({ platform, image }) {
+function parseArguments(args) {
+  const targets = [];
+  let expectedRevision;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === '--expected-revision') {
+      assert.ok(args[index + 1], '--expected-revision needs a full Git SHA');
+      expectedRevision = args[index + 1];
+      index += 1;
+    } else if (arg.startsWith('--expected-revision=')) {
+      expectedRevision = arg.slice('--expected-revision='.length);
+    } else {
+      targets.push(parseTarget(arg));
+    }
+  }
+
+  assert.ok(targets.length > 0, 'pass one or more platform=image targets');
+  if (expectedRevision !== undefined) {
+    assert.match(expectedRevision, /^[a-f0-9]{40}$/, '--expected-revision must be a full lowercase Git SHA');
+  }
+
+  return { targets, expectedRevision };
+}
+
+async function smokeImage({ platform, image, expectedRevision }) {
   const expectedArch = platform.split('/')[1];
   const containerName = `pacman-image-smoke-${expectedArch}-${process.pid}`;
   const inspect = docker([
     'image', 'inspect', '--format',
-    '{{.Os}}|{{.Architecture}}|{{.Config.User}}|{{json .Config.Entrypoint}}|{{json .Config.Cmd}}|{{json .Config.Healthcheck.Test}}',
+    '{{.Os}}|{{.Architecture}}|{{.Config.User}}|{{json .Config.Entrypoint}}|{{json .Config.Cmd}}|{{json .Config.Healthcheck.Test}}|{{index .Config.Labels "org.opencontainers.image.revision"}}|{{.Id}}',
     image,
   ]).split('|');
-  const [os, architecture, defaultUser, rawEntrypoint, rawCommand, rawHealthcheck] = inspect;
+  const [os, architecture, defaultUser, rawEntrypoint, rawCommand, rawHealthcheck, imageRevision, imageId] = inspect;
   const entrypoint = JSON.parse(rawEntrypoint);
   const command = JSON.parse(rawCommand);
   const healthcheck = JSON.parse(rawHealthcheck);
@@ -90,6 +115,23 @@ async function smokeImage({ platform, image }) {
       'inspect', '--format', '{{(index (index .NetworkSettings.Ports "8080/tcp") 0).HostPort}}', containerName,
     ]);
     await waitForRuntimeHealth(containerName, port);
+
+    if (expectedRevision !== undefined) {
+      const versionResponse = await fetch(`http://127.0.0.1:${port}/version`, {
+        signal: AbortSignal.timeout(1_000),
+      });
+      assert.equal(versionResponse.status, 200, `${image} must serve /version`);
+      const version = await versionResponse.json();
+      const identityIssues = [];
+      if (imageRevision !== expectedRevision) {
+        identityIssues.push(`image label revision ${imageRevision} does not match ${expectedRevision}`);
+      }
+      if (version.commit !== expectedRevision) {
+        identityIssues.push(`runtime /version.commit ${version.commit} does not match ${expectedRevision}`);
+      }
+      assert.deepEqual(identityIssues, [], `container image identity mismatch for ${image}`);
+      console.log(`${platform}: source ${expectedRevision}; image ${imageId}`);
+    }
   } finally {
     try {
       docker(['rm', '--force', containerName]);
@@ -103,9 +145,8 @@ async function smokeImage({ platform, image }) {
 }
 
 async function main() {
-  const targets = process.argv.slice(2).map(parseTarget);
-  assert.ok(targets.length > 0, 'pass one or more platform=image targets');
-  for (const target of targets) await smokeImage(target);
+  const { targets, expectedRevision } = parseArguments(process.argv.slice(2));
+  for (const target of targets) await smokeImage({ ...target, expectedRevision });
 }
 
 main().catch((error) => {

@@ -1,0 +1,62 @@
+{{- if and .Values.tetragon.enabled .Values.demo.fileProbeEnabled }}
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicyNamespaced
+metadata:
+  name: {{ include "pacman.fullname" . }}-file-probe
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "pacman.frontend.selectorLabels" . | nindent 6 }}
+  kprobes:
+    - call: sys_openat
+      syscall: true
+      args:
+        - index: 0
+          type: int
+        - index: 1
+          type: string
+      selectors:
+        - matchArgs:
+            - index: 1
+              operator: Equal
+              values:
+                - /app/demo-fixtures/synthetic-secret.txt
+          matchActions:
+            {{- if eq .Values.tetragon.fileProbeMode "observe" }}
+            - action: Post
+            {{- else }}
+            - action: Override
+              argError: -13
+{{- end }}
+{{- end }}
+{{- if and .Values.tetragon.enabled .Values.demo.execProbeEnabled }}
+---
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicyNamespaced
+metadata:
+  name: {{ include "pacman.fullname" . }}-exec-probe
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "pacman.frontend.selectorLabels" . | nindent 6 }}
+  kprobes:
+    - call: sys_execve
+      syscall: true
+      args:
+        - index: 0
+          type: string
+      selectors:
+        - matchArgs:
+            - index: 0
+              operator: Equal
+              values:
+                - /app/tools/demo-exec-probe.js
+          matchActions:
+            {{- if eq .Values.tetragon.execProbeMode "observe" }}
+            - action: Post
+            {{- else }}
+            - action: Sigkill
+            {{- end }}
+{{- end -}}

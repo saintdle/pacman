@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "pacman.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "pacman.frontend.labels" $ | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "pacman.frontend.selectorLabels" $ | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "pacman.frontend.labels" $ | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations: {{- include "pacman.demo.annotations" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "pacman.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- include "pacman.podSecurityContext" (dict "root" $ "ctx" .Values.podSecurityContext) | nindent 8 }}
+      containers:
+        - name: pacman
+          image: {{ include "pacman.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext: {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: MY_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: DEMO_SECURITY_MODE
+              value: {{ .Values.demo.enabled | quote }}
+            - name: DEMO_TOKEN_HEADER
+              value: {{ .Values.demo.tokenHeader | quote }}
+            - name: DEMO_FILE_PROBE_ENABLED
+              value: {{ .Values.demo.fileProbeEnabled | quote }}
+            - name: DEMO_EXEC_PROBE_ENABLED
+              value: {{ .Values.demo.execProbeEnabled | quote }}
+            {{- include "pacman.demo.tokenEnv" . | nindent 12 }}
+            {{- if .Values.roles.enabled }}
+            - name: APP_ROLE
+              value: web
+            - name: SCORE_SERVICE_URL
+              value: http://{{ include "pacman.fullname" . }}-score:8080
+            - name: USER_SERVICE_URL
+              value: http://{{ include "pacman.fullname" . }}-user:8080
+            {{- end }}
+            {{- include "pacman.dbEnv" . | nindent 12 }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+{{ include "pacman.applicationProbes" . | nindent 10 }}
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}

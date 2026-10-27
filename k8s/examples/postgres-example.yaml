@@ -150,7 +150,7 @@ spec:
               done
       containers:
         - name: migrate
-          image: docker.io/saintdle/pacman:latest
+          image: docker.io/saintdle/pacman@sha256:592740129bce7530a347146b86647f8b516df3c19105aa4c2fe40b878840fccf
           command: ["node", "src/db/migrate.js"]
           env:
             - name: DB_TYPE
@@ -189,7 +189,7 @@ spec:
     spec:
       containers:
         - name: pacman
-          image: docker.io/saintdle/pacman:latest
+          image: docker.io/saintdle/pacman@sha256:592740129bce7530a347146b86647f8b516df3c19105aa4c2fe40b878840fccf
           ports:
             - containerPort: 8080
               name: http
