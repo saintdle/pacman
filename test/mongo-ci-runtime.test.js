@@ -230,10 +230,34 @@ esac
   assert.equal(lifecycleRecord.consumer, 'chart-lifecycle');
   assert.equal(lifecycleRecord.namespace, 'pcl-mongo-default');
   assert.equal(lifecycleRecord.image, 'mongo:8');
+  assert.equal(lifecycleRecord.image_id, `docker-pullable://docker.io/library/mongo@sha256:${'c'.repeat(64)}`);
   assert.equal(lifecycleRecord.image_digest, `sha256:${'c'.repeat(64)}`);
   assert.equal(lifecycleRecord.server_version, '8.0.16');
   assert.equal(lifecycleRecord.capture_status, 'success');
   assert.doesNotMatch(lifecycleResult.stdout, /password|token|secret|authorization/i);
+
+  const observedBareImageId = 'docker.io/library/mongo@sha256:4fa737b8e8c1762dc08c3a0011858aafb5f96ab5c1c0e08941d2d5448caa5dc4';
+  const bareLifecyclePod = JSON.parse(lifecycleEnv.FIXTURE_POD_JSON);
+  bareLifecyclePod.items[0].status.containerStatuses[0].imageID = observedBareImageId;
+  const bareLifecycleResult = runWorkflowCommand(lifecycleMetadataCommand, lifecycle.bin, {
+    ...lifecycleEnv,
+    FIXTURE_POD_JSON: JSON.stringify(bareLifecyclePod),
+  });
+  assert.equal(bareLifecycleResult.status, 0, `${bareLifecycleResult.stderr}\n${bareLifecycleResult.stdout}`);
+  const bareLifecycleRecord = recordFrom(bareLifecycleResult.stdout, 'mongo-image');
+  assert.equal(bareLifecycleRecord.image_id, observedBareImageId);
+  assert.equal(bareLifecycleRecord.image_digest, 'sha256:4fa737b8e8c1762dc08c3a0011858aafb5f96ab5c1c0e08941d2d5448caa5dc4');
+
+  const malformedLifecyclePod = JSON.parse(lifecycleEnv.FIXTURE_POD_JSON);
+  malformedLifecyclePod.items[0].status.containerStatuses[0].imageID = 'docker.io/library/mongo@sha256:not-a-digest';
+  const malformedLifecycleResult = runWorkflowCommand(lifecycleMetadataCommand, lifecycle.bin, {
+    ...lifecycleEnv,
+    FIXTURE_POD_JSON: JSON.stringify(malformedLifecyclePod),
+  });
+  assert.notEqual(malformedLifecycleResult.status, 0, 'malformed lifecycle image identity must fail closed');
+  const malformedLifecycleRecord = recordFrom(malformedLifecycleResult.stdout, 'mongo-image');
+  assert.equal(malformedLifecycleRecord.image_id, 'unavailable');
+  assert.equal(malformedLifecycleRecord.image_digest, 'unavailable');
 
   const missingLifecycleIdentity = hostFixture(t);
   writeExecutable(path.join(missingLifecycleIdentity.bin, 'kubectl'), `#!/bin/sh

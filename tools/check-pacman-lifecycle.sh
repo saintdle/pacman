@@ -178,6 +178,8 @@ for pod in payload.get("items", []):
   if [[ "$image" == "mongo:8" || "$image" == "docker.io/library/mongo:8" ]]; then
     if [[ "$image_id" =~ ^(docker-pullable|containerd|docker)://[^[:space:]@]+@sha256:([a-f0-9]{64})$ ]]; then
       image_digest="sha256:${BASH_REMATCH[2]}"
+    elif [[ "$image_id" =~ ^[^[:space:]@]+@sha256:([a-f0-9]{64})$ ]]; then
+      image_digest="sha256:${BASH_REMATCH[1]}"
     elif [[ "$image_id" =~ ^(containerd|docker)://sha256:([a-f0-9]{64})$ ]]; then
       image_digest="sha256:${BASH_REMATCH[2]}"
     elif [[ "$image_id" =~ ^sha256:[a-f0-9]{64}$ ]]; then
