@@ -143,22 +143,50 @@ test('Mongo CI workflows qualify the real runner and record bounded database ide
 
   const adapter = hostFixture(t);
 writeExecutable(path.join(adapter.bin, 'docker'), `#!/bin/sh
+printf '%s\n' "$*" >> "$FIXTURE_DOCKER_CALLS"
 if [ "\${1:-}" = "image" ] && [ "\${2:-}" = "inspect" ]; then
-  if [ "\${FIXTURE_IMAGE_ID_MISSING:-0}" = "1" ]; then exit 1; fi
   case "\${4:-}" in
-    *RepoDigests*) printf '%s\\n' "$FIXTURE_REPO_DIGEST" ;;
-    *) printf '%s\\n' "$FIXTURE_IMAGE_ID" ;;
+    *RepoDigests*)
+      if [ "\${FIXTURE_DIGEST_MISSING:-0}" = "1" ]; then exit 1; fi
+      printf '%s\\n' "$FIXTURE_REPO_DIGEST"
+      ;;
+    *)
+      if [ "\${FIXTURE_IMAGE_ID_MISSING:-0}" = "1" ]; then exit 1; fi
+      printf '%s\\n' "$FIXTURE_IMAGE_ID"
+      ;;
   esac
   exit 0
 fi
 if [ "\${1:-}" = "run" ]; then
+  for arg in "$@"; do
+    case "$arg" in
+      com.pacman.mongo-metadata-probe=*) FIXTURE_PROBE_LABEL="\${arg#*=}" ;;
+    esac
+  done
+  printf '%s\\n' "$FIXTURE_PROBE_LABEL" > "$FIXTURE_PROBE_LABEL_FILE"
+  case "$FIXTURE_PROBE_MODE" in
+    timeout) exec /bin/sleep 20 ;;
+    failure) exit 1 ;;
+  esac
   printf 'db version v%s\\n' "$FIXTURE_SERVER_VERSION"
   exit 0
 fi
+if [ "\${1:-}" = "inspect" ]; then
+  FIXTURE_PROBE_LABEL="$(/bin/cat "$FIXTURE_PROBE_LABEL_FILE")"
+  printf '%s %s\\n' "$FIXTURE_PROBE_LABEL" "$FIXTURE_CONTAINER_ID"
+  exit 0
+fi
+if [ "\${1:-}" = "rm" ]; then exit 0; fi
 exit 97
 `);
+  const adapterCalls = path.join(path.dirname(adapter.bin), 'docker-calls.txt');
+  const adapterProbeLabel = path.join(path.dirname(adapter.bin), 'probe-label.txt');
   const adapterEnv = {
     ...adapter.env,
+    FIXTURE_DOCKER_CALLS: adapterCalls,
+    FIXTURE_PROBE_LABEL_FILE: adapterProbeLabel,
+    FIXTURE_PROBE_MODE: 'success',
+    FIXTURE_CONTAINER_ID: 'c'.repeat(64),
     FIXTURE_IMAGE_ID: `sha256:${'a'.repeat(64)}`,
     FIXTURE_REPO_DIGEST: `docker.io/library/mongo@sha256:${'b'.repeat(64)}`,
     FIXTURE_SERVER_VERSION: '8.0.16',
@@ -174,6 +202,11 @@ exit 97
   assert.equal(adapterRecord.server_version, '8.0.16');
   assert.equal(adapterRecord.capture_status, 'success');
   assert.doesNotMatch(adapterResult.stdout, /password|token|secret|authorization/i);
+  const successfulProbe = readFileSync(adapterCalls, 'utf8').split('\n').find((call) => call.startsWith('run '));
+  assert.ok(successfulProbe, 'valid local identity must run a version probe');
+  assert.match(successfulProbe, /--pull=never/);
+  assert.ok(successfulProbe.includes(adapterEnv.FIXTURE_IMAGE_ID), 'version probe must use the inspected immutable image ID');
+  assert.doesNotMatch(successfulProbe, /mongo:8/);
 
   const adapterFailureResult = runWorkflowCommand(adapterMetadataCommand, adapter.bin, {
     ...adapterEnv,
@@ -184,21 +217,66 @@ exit 97
 
   const missingAdapterIdentity = hostFixture(t);
 writeExecutable(path.join(missingAdapterIdentity.bin, 'docker'), `#!/bin/sh
+printf '%s\n' "$*" >> "$FIXTURE_DOCKER_CALLS"
 if [ "\${1:-}" = "image" ] && [ "\${2:-}" = "inspect" ]; then
-  if [ "\${4:-}" = "{{.Id}}" ]; then printf '%s\\n' "$FIXTURE_IMAGE_ID"; exit 0; fi
-  exit 1
+  if [ "\${4:-}" = "{{.Id}}" ]; then
+    if [ "\${FIXTURE_IMAGE_ID_MISSING:-0}" = "1" ]; then exit 1; fi
+    printf '%s\\n' "$FIXTURE_IMAGE_ID"
+    exit 0
+  fi
+  if [ "\${FIXTURE_DIGEST_MISSING:-0}" = "1" ]; then exit 1; fi
+  printf '%s\\n' "$FIXTURE_REPO_DIGEST"
+  exit 0
 fi
 if [ "\${1:-}" = "run" ]; then exit 1; fi
 exit 97
 `);
-  const missingAdapterResult = runWorkflowCommand(adapterMetadataCommand, missingAdapterIdentity.bin, {
-    ...missingAdapterIdentity.env,
-    FIXTURE_IMAGE_ID: '',
-  });
-  assert.notEqual(missingAdapterResult.status, 0, 'missing database image identity must fail closed');
-  const missingAdapterRecord = recordFrom(missingAdapterResult.stdout, 'mongo-image');
-  assert.equal(missingAdapterRecord.image_id, 'unavailable');
-  assert.equal(missingAdapterRecord.image_digest, 'unavailable');
+  for (const missing of [
+    { idMissing: true, digestMissing: true },
+    { idMissing: true, digestMissing: false },
+    { idMissing: false, digestMissing: true },
+  ]) {
+    const callsFile = path.join(path.dirname(missingAdapterIdentity.bin), `docker-calls-${missing.idMissing ? 'id' : 'digest'}.txt`);
+    const missingAdapterResult = runWorkflowCommand(adapterMetadataCommand, missingAdapterIdentity.bin, {
+      ...missingAdapterIdentity.env,
+      FIXTURE_DOCKER_CALLS: callsFile,
+      FIXTURE_IMAGE_ID: `sha256:${'a'.repeat(64)}`,
+      FIXTURE_REPO_DIGEST: `docker.io/library/mongo@sha256:${'b'.repeat(64)}`,
+      FIXTURE_IMAGE_ID_MISSING: missing.idMissing ? '1' : '0',
+      FIXTURE_DIGEST_MISSING: missing.digestMissing ? '1' : '0',
+    });
+    assert.notEqual(missingAdapterResult.status, 0, 'missing database image identity must fail closed');
+    const missingAdapterRecord = recordFrom(missingAdapterResult.stdout, 'mongo-image');
+    assert.equal(missingAdapterRecord.image_id, missing.idMissing ? 'unavailable' : `sha256:${'a'.repeat(64)}`);
+    assert.equal(missingAdapterRecord.image_digest, missing.digestMissing ? 'unavailable' : `sha256:${'b'.repeat(64)}`);
+    assert.doesNotMatch(readFileSync(callsFile, 'utf8'), /^run /m,
+      'missing local identity must not run or pull an image for diagnostics');
+  }
+
+  for (const mode of ['failure', 'timeout']) {
+    const failedCalls = path.join(path.dirname(adapter.bin), `docker-calls-${mode}.txt`);
+    const failedLabel = path.join(path.dirname(adapter.bin), `probe-label-${mode}.txt`);
+    const probeStartedAt = Date.now();
+    const failedProbeResult = runWorkflowCommand(adapterMetadataCommand, adapter.bin, {
+      ...adapterEnv,
+      FIXTURE_DOCKER_CALLS: failedCalls,
+      FIXTURE_PROBE_LABEL_FILE: failedLabel,
+      FIXTURE_PROBE_MODE: mode,
+      PACMAN_MONGO_CI_STATUS: 'failure',
+    });
+    const probeElapsedMs = Date.now() - probeStartedAt;
+    assert.equal(failedProbeResult.status, 0, failedProbeResult.stderr);
+    const failedProbeRecord = recordFrom(failedProbeResult.stdout, 'mongo-image');
+    assert.equal(failedProbeRecord.server_version, 'unavailable');
+    assert.equal(failedProbeRecord.capture_status, 'failure', 'diagnostics must preserve the adapter outcome');
+    if (mode === 'timeout') assert.ok(probeElapsedMs < 15000, `bounded version probe took ${probeElapsedMs}ms`);
+    const failedCallsText = readFileSync(failedCalls, 'utf8');
+    assert.match(failedCallsText,
+      /^inspect --format \{\{index \.Config\.Labels "com\.pacman\.mongo-metadata-probe"\}\} \{\{\.Id\}\} pacman-mongo-metadata-[a-f0-9]{32}$/m,
+      'failed probes must verify the random ownership label before cleanup');
+    assert.match(failedCallsText, new RegExp(`^rm --force ${'c'.repeat(64)}$`, 'm'));
+    assert.doesNotMatch(failedCallsText, /prune/i, 'cleanup must not remove unrelated Docker resources');
+  }
 
   const lifecycleMetadataCommand = `bash ${lifecycleScript} --mongo-runtime-metadata lifecycle pcl-mongo-default success`;
   const lifecycle = hostFixture(t);

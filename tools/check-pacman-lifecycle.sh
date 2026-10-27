@@ -111,6 +111,94 @@ extract_mongo_server_version() {
   fi
 }
 
+docker_bounded() {
+  local timeout_seconds="$1"
+  shift
+  python3 - "$timeout_seconds" "$@" <<'PY'
+import subprocess
+import sys
+
+try:
+    result = subprocess.run(
+        ["docker", *sys.argv[2:]],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        timeout=float(sys.argv[1]),
+        check=False,
+    )
+except subprocess.TimeoutExpired:
+    raise SystemExit(124)
+sys.stdout.write(result.stdout)
+raise SystemExit(result.returncode)
+PY
+}
+
+mongo_adapter_server_version_probe() {
+  local image_id="$1"
+  python3 - "$image_id" <<'PY'
+import re
+import subprocess
+import sys
+import uuid
+
+image_id = sys.argv[1]
+label_key = "com.pacman.mongo-metadata-probe"
+token = uuid.uuid4().hex
+name = f"pacman-mongo-metadata-{token}"
+probe_command = [
+    "docker", "run", "--pull=never", "--name", name,
+    "--label", f"{label_key}={token}", "--rm", "--entrypoint", "mongod",
+    image_id, "--version",
+]
+try:
+    probe = subprocess.run(
+        probe_command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        timeout=9.0,
+        check=False,
+    )
+except subprocess.TimeoutExpired:
+    probe = None
+
+if probe is not None and probe.returncode == 0:
+    sys.stdout.write(probe.stdout)
+    raise SystemExit(0)
+
+# A failed or timed-out Docker client may leave its named container running.
+# Remove it only after its random ownership label and immutable ID are verified.
+try:
+    inspect = subprocess.run(
+        ["docker", "inspect", "--format", f"{{{{index .Config.Labels \"{label_key}\"}}}} {{{{.Id}}}}", name],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        timeout=2.0,
+        check=False,
+    )
+except subprocess.TimeoutExpired:
+    inspect = None
+
+if inspect is not None and inspect.returncode == 0:
+    fields = inspect.stdout.strip().split()
+    if len(fields) == 2 and fields[0] == token and re.fullmatch(r"[a-f0-9]{64}", fields[1]):
+        try:
+            subprocess.run(
+                ["docker", "rm", "--force", fields[1]],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=2.0,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            pass
+
+raise SystemExit(1)
+PY
+}
+
 mongo_adapter_runtime_metadata() {
   local image="mongo:8"
   local capture_status="${PACMAN_MONGO_CI_STATUS:-unknown}"
@@ -125,8 +213,8 @@ mongo_adapter_runtime_metadata() {
     *) capture_status=unknown ;;
   esac
 
-  image_id="$(docker image inspect --format '{{.Id}}' "$image" 2>/dev/null || true)"
-  repo_digests="$(docker image inspect --format '{{join .RepoDigests "\n"}}' "$image" 2>/dev/null || true)"
+  image_id="$(docker_bounded 4.5 image inspect --format '{{.Id}}' "$image" || true)"
+  repo_digests="$(docker_bounded 4.5 image inspect --format '{{join .RepoDigests "\n"}}' "$image" || true)"
   if [[ ! "$image_id" =~ ^sha256:[a-f0-9]{64}$ ]]; then
     image_id="unavailable"
   fi
@@ -137,8 +225,10 @@ mongo_adapter_runtime_metadata() {
     fi
   done <<<"$repo_digests"
 
-  version_output="$(docker run --rm --entrypoint mongod "$image" --version 2>/dev/null || true)"
-  server_version="$(extract_mongo_server_version "$version_output")"
+  if [[ "$image_id" != unavailable && "$image_digest" != unavailable ]]; then
+    version_output="$(mongo_adapter_server_version_probe "$image_id" || true)"
+    server_version="$(extract_mongo_server_version "$version_output")"
+  fi
   emit_mongo_image_record adapter "" "$image" "$image_id" "$image_digest" "$server_version" "$capture_status"
   [[ "$image_id" != unavailable && "$image_digest" != unavailable ]]
 }
