@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -130,4 +131,54 @@ test('workflow gates proposal creation on the guard output and exposes verified 
   assert.match(workflow, /Rollback identity does not match the verified app release record/);
   assert.match(workflow, /branch="\$branch-\$APP_VERSION"/);
   assert.match(workflow, /git add charts\/pacman\/Chart\.yaml charts\/pacman\/values\.yaml k8s\/examples\/multi-role-deployment\.yaml k8s\/examples\/postgres-example\.yaml pacman-chart-source-promotion-state\.json/);
+});
+
+test('source proposal workflow commits with the configured GitHub bot author and committer', () => {
+  const workflow = readFileSync(new URL('../.github/workflows/chart-source-promotion.yml', import.meta.url), 'utf8');
+  const proposalStart = workflow.indexOf('      - name: Create the app-owned chart source proposal\n');
+  assert.notEqual(proposalStart, -1, 'workflow must include the guarded proposal step');
+  const proposal = workflow.slice(proposalStart);
+  const commitPosition = proposal.search(/^[ ]{10}git commit /m);
+  assert.notEqual(commitPosition, -1, 'proposal step must include its commit command');
+  const preCommitCommands = proposal.slice(0, commitPosition);
+  const identityCommands = [...preCommitCommands.matchAll(/^[ ]{10}git config --local user\.(?:name|email) .+$/gm)]
+    .map(([command]) => command.trim());
+
+  const directory = mkdtempSync(join(tmpdir(), 'pacman-chart-source-identity-'));
+  const repository = join(directory, 'repository');
+  const globalConfig = join(directory, 'global-gitconfig');
+  mkdirSync(repository);
+  writeFileSync(globalConfig, '');
+  const env = {
+    ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_') && key !== 'EMAIL')),
+    GIT_CONFIG_GLOBAL: globalConfig,
+    GIT_CONFIG_NOSYSTEM: '1',
+  };
+  const runGit = (args) => spawnSync('git', args, { cwd: repository, env, encoding: 'utf8' });
+
+  try {
+    const initialized = runGit(['init', '--quiet']);
+    assert.equal(initialized.status, 0, initialized.stderr);
+    writeFileSync(join(repository, 'proposal.txt'), 'chart source proposal\n');
+    const staged = runGit(['add', 'proposal.txt']);
+    assert.equal(staged.status, 0, staged.stderr);
+
+    const committed = spawnSync('bash', ['-euo', 'pipefail', '-c', `${identityCommands.join('\n')}\ngit commit -m "chart source proposal"`], {
+      cwd: repository,
+      env,
+      encoding: 'utf8',
+    });
+    assert.equal(committed.status, 0, committed.stderr);
+
+    const identity = runGit(['show', '-s', '--format=%an%x00%ae%x00%cn%x00%ce', 'HEAD']);
+    assert.equal(identity.status, 0, identity.stderr);
+    assert.deepEqual(identity.stdout.trim().split('\0'), [
+      'github-actions[bot]',
+      '41898282+github-actions[bot]@users.noreply.github.com',
+      'github-actions[bot]',
+      '41898282+github-actions[bot]@users.noreply.github.com',
+    ]);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });

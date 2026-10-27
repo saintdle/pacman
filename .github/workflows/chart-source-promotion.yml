@@ -230,6 +230,8 @@ jobs:
           helm lint charts/pacman
           git diff --check
           git add charts/pacman/Chart.yaml charts/pacman/values.yaml k8s/examples/multi-role-deployment.yaml k8s/examples/postgres-example.yaml pacman-chart-source-promotion-state.json
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "chore(chart): propose Pac-Man $APP_VERSION as $CHART_VERSION"
           git push origin "$branch"
           gh pr create --repo saintdle/pacman --head "$branch" --base main \
