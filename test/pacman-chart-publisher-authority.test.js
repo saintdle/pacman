@@ -22,7 +22,7 @@ test('chart validation runs on pull requests and main chart commits with read-on
 test('chart CI is only a candidate validator; publisher jobs have one authority guard', async () => {
   const workflowDir = path.join(repoRoot, '.github/workflows');
   const files = (await readdir(workflowDir)).filter((file) => file.endsWith('.yml'));
-  const marker = /chart-artifact-source\.mjs publish|api\.github\.com\/repos\/saintdle\/helm-charts\/dispatches|pages\.github\.com|helm\s+(?:package|push)|upload-pages-artifact|actions\/deploy-pages|gh\s+release\s+create/i;
+  const marker = /chart-artifact-source\.mjs publish|api\.github\.com\/repos\/saintdle\/pacman\/dispatches|pages\.github\.com|helm\s+(?:package|push)|upload-pages-artifact|actions\/deploy-pages|gh\s+release\s+create/i;
   const publisherFiles = [];
 
   for (const file of files) {
@@ -33,8 +33,17 @@ test('chart CI is only a candidate validator; publisher jobs have one authority 
   assert.deepEqual(publisherFiles.sort(), ['chart-artifact-source.yml', 'release.yml']);
   const releaseWorkflow = await readFile(path.join(workflowDir, 'release.yml'), 'utf8');
   const sourceWorkflow = await readFile(path.join(workflowDir, 'chart-artifact-source.yml'), 'utf8');
-  assert.match(releaseWorkflow, /Dispatch Helm chart promotion/);
-  assert.match(releaseWorkflow, /saintdle\/helm-charts/);
+  const promotionWorkflow = await readFile(path.join(workflowDir, 'chart-source-promotion.yml'), 'utf8');
+  assert.match(releaseWorkflow, /Notify app-owned chart source promoter/);
+  assert.match(releaseWorkflow, /if: steps\.policy\.outputs\.dispatch == 'true' && steps\.image\.outcome == 'success'/);
+  assert.match(releaseWorkflow, /GITHUB_TOKEN: \$\{\{ secrets\.GITHUB_TOKEN \}\}/);
+  assert.match(releaseWorkflow, /https:\/\/api\.github\.com\/repos\/saintdle\/pacman\/dispatches/);
+  assert.doesNotMatch(releaseWorkflow, /RELEASE_AUTOMATION_TOKEN|saintdle\/helm-charts/);
+  assert.match(promotionWorkflow, /repository_dispatch:\n\s+types: \[pacman-release\]/);
+  assert.match(promotionWorkflow, /EVENT_RELEASE_TAG: \$\{\{ github\.event\.release\.tag_name \|\| '' \}\}/);
+  assert.match(promotionWorkflow, /gh release list --repo saintdle\/pacman --limit 1/);
+  assert.match(promotionWorkflow, /node tools\/release-records\.js verify-app/);
+  assert.doesNotMatch(promotionWorkflow, /github\.event\.client_payload/);
   assert.match(sourceWorkflow, /workflow_run:/);
   assert.match(sourceWorkflow, /node tools\/chart-artifact-source\.mjs validate-candidate/);
   assert.doesNotMatch(sourceWorkflow, /vars\./);

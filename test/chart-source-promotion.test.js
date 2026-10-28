@@ -118,6 +118,14 @@ test('rollback is a verified proposal and resume requires its pending state', ()
 
 test('workflow gates proposal creation on the guard output and exposes verified rollback and resume controls', () => {
   const workflow = readFileSync(new URL('../.github/workflows/chart-source-promotion.yml', import.meta.url), 'utf8');
+  assert.match(workflow, /^  repository_dispatch:\n    types: \[pacman-release\]$/m, 'same-repository release notifications must wake the app-owned promoter');
+  assert.match(workflow, /^  release:\n    types: \[published\]$/m, 'release publication must remain a promoter trigger');
+  assert.match(workflow, /^  schedule:\n    - cron: '37 \* \* \* \*'$/m, 'scheduled reconciliation must remain enabled');
+  assert.match(workflow, /^  workflow_dispatch:\n/m, 'manual reconciliation and rollback controls must remain enabled');
+  assert.match(workflow, /EVENT_RELEASE_TAG: \$\{\{ github\.event\.release\.tag_name \|\| '' \}\}/);
+  assert.match(workflow, /if \[\[ -z "\$release_tag" \]\]; then[\s\S]*?gh release list --repo saintdle\/pacman --limit 1/);
+  assert.match(workflow, /node tools\/release-records\.js verify-app/);
+  assert.doesNotMatch(workflow, /github\.event\.client_payload/, 'dispatch payload must not select or supply release authority');
   assert.match(workflow, /id: proposal/);
   assert.match(workflow, /Preserve only a verified pending chart source proposal/);
   assert.match(workflow, /Read the merged promotion state/);

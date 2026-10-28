@@ -1,6 +1,8 @@
 name: Reconcile Pac-Man chart source
 
 on:
+  repository_dispatch:
+    types: [pacman-release]
   release:
     types: [published]
   schedule:

@@ -18,6 +18,15 @@ const event = {
   },
 };
 
+test('every existing Helm setup action remains pinned to the reviewed v5 commit', () => {
+  const workflows = [
+    readFileSync(new URL('../.github/workflows/chart-ci.yml', import.meta.url), 'utf8'),
+    readFileSync(new URL('../.github/workflows/chart-artifact-source.yml', import.meta.url), 'utf8'),
+  ].join('\n');
+  const helmSetupReferences = [...workflows.matchAll(/^ {8}uses: azure\/setup-helm@[^\n]+$/gm)].map(([reference]) => reference.trim());
+  assert.deepEqual(helmSetupReferences, Array(3).fill('uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5'));
+});
+
 function candidateApi({
   value = 'pacman',
   candidateSha = sourceCommit,
