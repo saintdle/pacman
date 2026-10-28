@@ -50,23 +50,26 @@ for high and critical vulnerabilities with available fixes. When findings are
 present, the workflow opens a GitHub issue with affected packages, versions,
 severities, and advisory links.
 
-Application and chart releases have independent versions. The currently
-documented published pair is app `0.7.16` and chart `0.7.17`; the released
-`0.7.16` image already contains the opt-in fault and synthetic security-probe
-runtime described below. The chart keeps those controls disabled by default.
-See [`docs/release-records.md`](docs/release-records.md) for the immutable
-image identity and the evidence available for these legacy releases.
+Application and chart releases have independent versions. The explicitly
+pinned, verified migration/reference pair is app `0.7.17` and chart `0.7.20`.
+The chart's opt-in fault and synthetic security-probe controls work with that
+released app image and remain disabled by default. Use the public Helm
+[repository index](https://saintdle.github.io/helm-charts/index.yaml) and each
+version's immutable release records to select and verify the latest package;
+the pinned pair remains a reproducible reference. See the index and records
+when selecting a newer package.
+See [`docs/release-records.md`](docs/release-records.md) for its immutable
+image and package identities, and the scope of the native verification.
 
-`saintdle/pacman` maintains the application and editable chart source.
-`saintdle/pacman-for-k8s` maintains the platform installation surface and
-scenario catalog. `saintdle/helm-charts` serves packaged charts at the stable
-[Helm repository URL](https://saintdle.github.io/helm-charts); its existing
-publisher remains the sole live authority while the setting is unset or
-`helm-charts`. A separately approved switch selects the prepared generated
-publisher; verify its public package chain before retiring the legacy source.
-The generated publisher is not active by default. See
-[`docs/pacman-chart-source.md`](docs/pacman-chart-source.md) for source and
-recovery boundaries.
+[`saintdle/pacman`](https://github.com/saintdle/pacman) maintains the app and
+sole editable chart source at [`charts/pacman`](charts/pacman/), and owns the
+chart source publisher. [`saintdle/pacman-for-k8s`](https://github.com/saintdle/pacman-for-k8s)
+maintains platform setup, scenario guides, and the published consumer
+identities. [`saintdle/helm-charts`](https://github.com/saintdle/helm-charts)
+continues to serve the stable public Helm repository and generated package
+history; it no longer maintains or publishes the Pac-Man chart source. See
+[`docs/pacman-chart-source.md`](docs/pacman-chart-source.md) for source,
+distribution, and recovery boundaries.
 
 Pull requests build the image locally and run the same Trivy scan before
 merge. The scan reports HIGH and CRITICAL findings with available fixes. Its
@@ -330,16 +333,15 @@ Example ConfigMap and patch files live under [`k8s/examples`](k8s/examples):
   [`overlays/prometheus`](k8s/examples/overlays/prometheus), and
   [`overlays/tetragon`](k8s/examples/overlays/tetragon) apply optional
   CRD-backed resources only when those controllers are installed.
-- [`helm-values.yaml`](k8s/examples/helm-values.yaml) contains demo values for
-  chart `0.7.17` and its pinned app image `0.7.16`. The released image includes
-  the opt-in fault and synthetic probe runtime; this fragment enables demo
-  controls only when you install it and supply the referenced Secret. See
-  [`k8s/examples/README.md`](k8s/examples/README.md) for the stable install path
-  and Secret setup. Pass this fragment to Helm with `--values`.
+- [`helm-values.yaml`](k8s/examples/helm-values.yaml) preserves a historical
+  demo-values example for chart `0.7.17` and app image `0.7.16`. See
+  [`k8s/examples/README.md`](k8s/examples/README.md) for the verified
+  `0.7.20`/`0.7.17` reference install and Secret setup.
 - [`values-openshift.yaml`](k8s/examples/values-openshift.yaml) documents the
-  OpenShift override values for that chart (`openShift.enabled` and
-  `openShift.sccRoleBinding.create`). The complete chart values schema lives in
-  the [`helm-charts` repository](https://github.com/saintdle/helm-charts).
+  OpenShift override values for the chart (`openShift.enabled` and
+  `openShift.sccRoleBinding.create`). The complete values schema is in
+  [`charts/pacman/values.yaml`](charts/pacman/values.yaml) and
+  [`charts/pacman/README.md`](charts/pacman/README.md).
 - [`ebee-mode-rollout-patch.yaml`](k8s/examples/ebee-mode-rollout-patch.yaml)
   flips eBee mode on and bumps a pod-template annotation to force a rollout.
 

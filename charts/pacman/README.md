@@ -5,7 +5,7 @@ profile, with a choice of MongoDB or PostgreSQL backend.
 
 App image: [`docker.io/saintdle/pacman`](https://hub.docker.com/r/saintdle/pacman)
 (pinned by digest by default).
-Source: [`saintdle/pacman`](https://github.com/saintdle/pacman),
+Source: [`saintdle/pacman`](https://github.com/saintdle/pacman/tree/main/charts/pacman),
 deployment surface: [`saintdle/pacman-for-k8s`](https://github.com/saintdle/pacman-for-k8s).
 
 ## TL;DR
@@ -107,9 +107,14 @@ and OpenShift handling as the frontend, so no extra wiring is required.
 
 ## Fault and security-probe demos
 
-Chart `0.7.17` defaults to app image `0.7.16`, which already includes the
-opt-in fault and synthetic security-probe runtime. These controls remain off by
-default, so the published pair can use the demos without an image override.
+The chart's pinned default app image is release `0.7.17`, which includes the
+opt-in fault and synthetic security-probe runtime. These controls remain off
+by default, so the verified app `0.7.17` / chart `0.7.20` reference pair can
+use the demos without an image override. Its
+[native consumer run](https://github.com/saintdle/pacman-for-k8s/actions/runs/40666073800)
+verified Cilium L7 allow/deny with recovery and Tetragon file/exec events in
+observe-only mode. It does not establish Tetragon enforcement or validate the
+full scenario catalog, OpenShift deployment, or external-provider paths.
 
 Build and load a custom app image only when testing unpublished app/runtime
 changes. From the root of the matching Pac-Man app source checkout, build that
@@ -226,13 +231,14 @@ creates a ServiceMonitor; `ciliumNetworkPolicy.enabled` creates the chart's
 typed Cilium policy (with score-write denial controlled by
 `ciliumNetworkPolicy.denyScoreWrites`); and `tetragon.enabled` creates the
 file/exec tracing policies, with `tetragon.fileProbeMode` and
-`tetragon.execProbeMode` set to `observe` or `enforce`. The Tetragon policies
-match only the fixed synthetic file and helper under the selected Pac-Man pods.
-Enforcement depends on kernel support for BPF kprobe override and a compatible
-syscall path; a pathname check has a time-of-check/time-of-use limitation.
-Preflight those requirements and verify actual actions and unrelated-workload
-negative controls before relying on enforcement. Chart rendering or policy
-presence alone does not demonstrate runtime enforcement.
+`tetragon.execProbeMode` set to `observe` or `enforce`. The verified native run
+used observe mode only. The Tetragon policies match only the fixed synthetic
+file and helper under the selected Pac-Man pods. Enforcement depends on kernel
+support for BPF kprobe override and a compatible syscall path; a pathname
+check has a time-of-check/time-of-use limitation. Preflight those requirements
+and verify actual actions and unrelated-workload negative controls before
+relying on enforcement. Chart rendering or policy presence alone does not
+demonstrate runtime enforcement.
 
 The matching new app candidate uses explicit Node entrypoints and a nonroot
 distroless runtime. It has no shell inside the image and does not launch
@@ -352,18 +358,20 @@ to preserve either resource.
 
 ## Database retention and uninstall
 
-The corrected chart source declares version 0.7.19; the legacy-to-App source
-sequence reserves 0.7.18 for the legacy chart and 0.7.19 for the
-later App source. A version is usable only after its package is published and
-listed in the Helm repository index.
+The chart source marks its generated database PVCs and credential Secrets with
+Helm's `keep` policy. Uninstalling a release with these annotations leaves
+those chart-owned resources in the namespace. Reinstall with the same release
+name and namespace to reuse the stored data and credentials. Existing
+credential data takes precedence over changed `auth` values. A Secret named
+through `mongo.existingSecret` or `postgres.existingSecret` remains
+user-managed; it is not rendered or owned by the chart.
 
-The chart-generated database PVC and credential Secret carry Helm's keep
-policy. Uninstalling a release with that policy leaves both objects in the
-namespace. Reinstall with the same release name and namespace to reuse the
-stored data and credentials. Existing credential data takes precedence over
-changed `auth` values. A Secret named through `mongo.existingSecret` or
-`postgres.existingSecret` remains user-managed and is never rendered or
-retained by the chart.
+Published chart `0.7.17` and earlier did not mark database PVCs or
+chart-generated credential Secrets for retention. If upgrading an older
+release, upgrade it before uninstalling when possible. If it cannot be
+upgraded in place, back up or migrate both the database data and generated
+credentials before uninstalling; the later chart cannot retain objects after
+the older release has removed them.
 
 ```bash
 helm uninstall pacman --namespace pacman-demo
