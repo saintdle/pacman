@@ -24,23 +24,34 @@ process when `DB_TYPE=memory` (the default).
 
 ## Releases
 
-Merging a pull request into `main` runs the release workflow. Before it builds
-or publishes an image, the workflow runs lint, unit tests, and both MongoDB and
-PostgreSQL adapter suites against the exact commit being released. A failed
-check blocks image publication, GitHub release creation, and chart promotion.
+The application release workflow runs on `main` pushes that change app build or
+runtime inputs, and also starts for changes under `charts/pacman/`. On a push,
+the release resolver selects an app release only when app runtime inputs
+changed. These
+include the image build, dependency files, protocol, app source, browser assets,
+and demo runtime inputs; docs-only and test-only changes by themselves do not
+select an app release. A chart-only change skips the app image and version;
+chart CI and the generated chart publisher handle it independently.
 
-Unless the pull request changes the `version` field in `package.json`, the
-workflow increments the highest published Pac-Man release by one patch version.
-For example, a published `0.7.5` becomes `0.7.6` automatically. Replaying a
-commit that already has a release reuses that release's recorded image digest
-and version tag. It does not depend on the current `latest` image or move that
-tag.
+For an eligible app release, the workflow runs lint, unit tests, and both
+MongoDB and PostgreSQL adapter suites against the exact commit. A failed check
+blocks image publication, GitHub release creation, and chart promotion. When an
+eligible runtime change does not set a version override, the resolver
+increments the greater of the current app version and highest published app
+version by one patch. For example, a published `0.7.5` becomes `0.7.6` when the
+current app version is not higher. Replaying a commit that already has a
+release reuses that release's recorded image digest and version tag; it does
+not depend on or move the mutable image `latest` tag.
 
-To request a minor or major release, change both `package.json` and
-`package-lock.json` in the pull request, for example from `0.7.5` to `0.8.0`.
-The reviewed `package.json` version is the release override. The workflow
-rejects an out-of-order version, an unsynchronised lockfile, or a reused release
-tag.
+For a runtime-eligible app release, changing `package.json` from its previous
+version sets the reviewed release-version override. Keep `package-lock.json`
+synchronized; the workflow rejects an out-of-order override, an unsynchronized
+lockfile, or a reused release tag. For example, change both files from `0.7.5`
+to `0.8.0` to request that minor version.
+
+A manual release is also available through workflow dispatch on `main`. Choose
+an explicit `patch`, `minor`, or `major` bump; the selected bump does not depend
+on an app runtime path change.
 
 Each release publishes one `linux/amd64` and `linux/arm64` manifest list under
 the version tag and moves `latest` to that same manifest list. The image is
@@ -50,23 +61,26 @@ for high and critical vulnerabilities with available fixes. When findings are
 present, the workflow opens a GitHub issue with affected packages, versions,
 severities, and advisory links.
 
-Application and chart releases have independent versions. The currently
-documented published pair is app `0.7.16` and chart `0.7.17`; the released
-`0.7.16` image already contains the opt-in fault and synthetic security-probe
-runtime described below. The chart keeps those controls disabled by default.
-See [`docs/release-records.md`](docs/release-records.md) for the immutable
-image identity and the evidence available for these legacy releases.
+Application and chart releases have independent versions. The explicitly
+pinned, verified migration/reference pair is app `0.7.17` and chart `0.7.20`.
+The chart's opt-in fault and synthetic security-probe controls work with that
+released app image and remain disabled by default. Use the public Helm
+[repository index](https://saintdle.github.io/helm-charts/index.yaml) and each
+version's immutable release records to select and verify the latest package;
+the pinned pair remains a reproducible reference. See the index and records
+when selecting a newer package.
+See [`docs/release-records.md`](docs/release-records.md) for its immutable
+image and package identities, and the scope of the native verification.
 
-`saintdle/pacman` maintains the application and editable chart source.
-`saintdle/pacman-for-k8s` maintains the platform installation surface and
-scenario catalog. `saintdle/helm-charts` serves packaged charts at the stable
-[Helm repository URL](https://saintdle.github.io/helm-charts); its existing
-publisher remains the sole live authority while the setting is unset or
-`helm-charts`. A separately approved switch selects the prepared generated
-publisher; verify its public package chain before retiring the legacy source.
-The generated publisher is not active by default. See
-[`docs/pacman-chart-source.md`](docs/pacman-chart-source.md) for source and
-recovery boundaries.
+[`saintdle/pacman`](https://github.com/saintdle/pacman) maintains the app and
+sole editable chart source at [`charts/pacman`](charts/pacman/), and owns the
+chart source publisher. [`saintdle/pacman-for-k8s`](https://github.com/saintdle/pacman-for-k8s)
+maintains platform setup, scenario guides, and the published consumer
+identities. [`saintdle/helm-charts`](https://github.com/saintdle/helm-charts)
+continues to serve the stable public Helm repository and generated package
+history; it no longer maintains or publishes the Pac-Man chart source. See
+[`docs/pacman-chart-source.md`](docs/pacman-chart-source.md) for source,
+distribution, and recovery boundaries.
 
 Pull requests build the image locally and run the same Trivy scan before
 merge. The scan reports HIGH and CRITICAL findings with available fixes. Its
@@ -330,16 +344,15 @@ Example ConfigMap and patch files live under [`k8s/examples`](k8s/examples):
   [`overlays/prometheus`](k8s/examples/overlays/prometheus), and
   [`overlays/tetragon`](k8s/examples/overlays/tetragon) apply optional
   CRD-backed resources only when those controllers are installed.
-- [`helm-values.yaml`](k8s/examples/helm-values.yaml) contains demo values for
-  chart `0.7.17` and its pinned app image `0.7.16`. The released image includes
-  the opt-in fault and synthetic probe runtime; this fragment enables demo
-  controls only when you install it and supply the referenced Secret. See
-  [`k8s/examples/README.md`](k8s/examples/README.md) for the stable install path
-  and Secret setup. Pass this fragment to Helm with `--values`.
+- [`helm-values.yaml`](k8s/examples/helm-values.yaml) preserves a historical
+  demo-values example for chart `0.7.17` and app image `0.7.16`. See
+  [`k8s/examples/README.md`](k8s/examples/README.md) for the verified
+  `0.7.20`/`0.7.17` reference install and Secret setup.
 - [`values-openshift.yaml`](k8s/examples/values-openshift.yaml) documents the
-  OpenShift override values for that chart (`openShift.enabled` and
-  `openShift.sccRoleBinding.create`). The complete chart values schema lives in
-  the [`helm-charts` repository](https://github.com/saintdle/helm-charts).
+  OpenShift override values for the chart (`openShift.enabled` and
+  `openShift.sccRoleBinding.create`). The complete values schema is in
+  [`charts/pacman/values.yaml`](charts/pacman/values.yaml) and
+  [`charts/pacman/README.md`](charts/pacman/README.md).
 - [`ebee-mode-rollout-patch.yaml`](k8s/examples/ebee-mode-rollout-patch.yaml)
   flips eBee mode on and bumps a pod-template annotation to force a rollout.
 

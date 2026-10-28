@@ -7,7 +7,41 @@ after it verifies the manifest list and signs the image. The existing
 compatibility period; the metadata asset also pins the app record URL and its
 SHA-256 checksum.
 
-The currently documented published pair is app `0.7.16` and chart `0.7.17`.
+## Verified migration/reference pair
+
+The pinned migration/reference pair is app `0.7.17` and chart `0.7.20`. It is
+a verified immutable tuple for reproduction. Select the latest chart from the public
+[Helm index](https://saintdle.github.io/helm-charts/index.yaml), then verify
+its versioned release record and package checksum.
+
+App `0.7.17` was built from
+[`saintdle/pacman` commit `776bc7d98003ea2361ef8ee84e624da2a63f8f08`](https://github.com/saintdle/pacman/commit/776bc7d98003ea2361ef8ee84e624da2a63f8f08)
+as `docker.io/saintdle/pacman@sha256:2a55f4d74bc05dea3ae05912fbdcbe9348f9aafb752902054a7f066cfa112f68`.
+Its immutable [app release record](https://github.com/saintdle/pacman/releases/download/pacman-v0.7.17/app-release-record.json)
+has SHA-256
+`8fc0922b7f46a30b4ed15e025ed99381b8c21723072e25c701e68e7b45564737`.
+Chart `0.7.20` was built from
+[`saintdle/pacman` commit `a405d8d66d63c8d121ed993f55583a6ff634c86d`](https://github.com/saintdle/pacman/commit/a405d8d66d63c8d121ed993f55583a6ff634c86d)
+and distributed in
+[`saintdle/helm-charts` commit `1381632438f8f54088996d0cb86bf6f1d16e8602`](https://github.com/saintdle/helm-charts/commit/1381632438f8f54088996d0cb86bf6f1d16e8602).
+The immutable [chart release](https://github.com/saintdle/helm-charts/releases/tag/pacman-0.7.20)
+contains [`chart-release-record.json`](https://github.com/saintdle/helm-charts/releases/download/pacman-0.7.20/chart-release-record.json)
+with SHA-256
+`75698e5320b948caa7411f8f2a4b1b011860248fc2302cfb95441fa39511350c` and
+[`pacman-0.7.20.tgz`](https://github.com/saintdle/helm-charts/releases/download/pacman-0.7.20/pacman-0.7.20.tgz)
+with SHA-256
+`07544a4b0d1279d2310a61f065140a2a5c6b12d13ca45017f920188990dd6e58`.
+The verified consumer compatibility lock has SHA-256
+`c4713869cdabf71cb68818c1abcce36a72d85ff210788ffd6f448b186541337b`.
+
+The public [native consumer run](https://github.com/saintdle/pacman-for-k8s/actions/runs/40666073800)
+verified the amd64 runtime image identity, Cilium L7 allow/deny with baseline
+and recovery behavior, and loaded Tetragon sensors with synthetic file/exec
+events in observe-only mode. It does not demonstrate enforcement or validate
+the full scenario catalog, OpenShift deployment, or external-provider paths.
+
+## Historical legacy pair
+
 App `0.7.16` was built from
 [`saintdle/pacman` commit `13f04d6e6aea62f1d32d57d90e4eff786083c02e`](https://github.com/saintdle/pacman/commit/13f04d6e6aea62f1d32d57d90e4eff786083c02e)
 as `docker.io/saintdle/pacman@sha256:592740129bce7530a347146b86647f8b516df3c19105aa4c2fe40b878840fccf`.
@@ -15,7 +49,7 @@ The public `pacman-0.7.17` chart source tag resolves to
 [`saintdle/helm-charts` commit `1d11684428b2069aef8d4e69c37237b5b3c910a5`](https://github.com/saintdle/helm-charts/commit/1d11684428b2069aef8d4e69c37237b5b3c910a5).
 The later `c24c5267340a58259cf3d7c8f337ace4c19d1d7a` commit is a migration
 donor for a chart copy, not provenance for the published release.
-These published releases predate schema-v1 release records: their legacy
+This historical pair predates schema-v1 release records: its legacy
 metadata does not provide the v1 record proof for platform descriptors,
 provenance, signatures, or a consumer compatibility lock. This record-format
 limit does not mean platform manifests are absent. The public
@@ -52,8 +86,9 @@ the generated package. Both chart-record and package assets must come from the
 same immutable distribution release. Supported release tags are exactly
 `helm-chart-v<version>` and `pacman-<version>`; the version must be canonical
 stable SemVer without leading zeroes.
-This repository provides chart-record codecs and fixtures; chart publication
-is owned by the chart repository.
+This repository provides chart-record codecs and fixtures. Pac-Man owns the
+editable chart source and source-publishing workflow; `helm-charts` serves the
+generated package distribution and its versioned release assets.
 
 Consumer compatibility locks use
 `kind: "consumer-compatibility-lock"`. They pin both the app record and
