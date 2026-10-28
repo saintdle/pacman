@@ -129,7 +129,8 @@ try:
     )
 except subprocess.TimeoutExpired:
     raise SystemExit(124)
-sys.stdout.write(result.stdout)
+if result.returncode == 0:
+    sys.stdout.write(result.stdout)
 raise SystemExit(result.returncode)
 PY
 }

@@ -147,10 +147,18 @@ printf '%s\n' "$*" >> "$FIXTURE_DOCKER_CALLS"
 if [ "\${1:-}" = "image" ] && [ "\${2:-}" = "inspect" ]; then
   case "\${4:-}" in
     *RepoDigests*)
+      if [ "\${FIXTURE_DIGEST_FAIL_AFTER_OUTPUT:-0}" = "1" ]; then
+        printf '%s\\n' "$FIXTURE_REPO_DIGEST"
+        exit 1
+      fi
       if [ "\${FIXTURE_DIGEST_MISSING:-0}" = "1" ]; then exit 1; fi
       printf '%s\\n' "$FIXTURE_REPO_DIGEST"
       ;;
     *)
+      if [ "\${FIXTURE_IMAGE_ID_FAIL_AFTER_OUTPUT:-0}" = "1" ]; then
+        printf '%s\\n' "$FIXTURE_IMAGE_ID"
+        exit 1
+      fi
       if [ "\${FIXTURE_IMAGE_ID_MISSING:-0}" = "1" ]; then exit 1; fi
       printf '%s\\n' "$FIXTURE_IMAGE_ID"
       ;;
@@ -251,6 +259,32 @@ exit 97
     assert.equal(missingAdapterRecord.image_digest, missing.digestMissing ? 'unavailable' : `sha256:${'b'.repeat(64)}`);
     assert.doesNotMatch(readFileSync(callsFile, 'utf8'), /^run /m,
       'missing local identity must not run or pull an image for diagnostics');
+  }
+
+  for (const failedInspect of [
+    { idFailed: true, digestFailed: false },
+    { idFailed: false, digestFailed: true },
+    { idFailed: true, digestFailed: true },
+  ]) {
+    const label = 'id-' + failedInspect.idFailed + '-digest-' + failedInspect.digestFailed;
+    const callsFile = path.join(path.dirname(adapter.bin), 'docker-calls-failed-inspect-' + label + '.txt');
+    const failedInspectResult = runWorkflowCommand(adapterMetadataCommand, adapter.bin, {
+      ...adapterEnv,
+      FIXTURE_DOCKER_CALLS: callsFile,
+      FIXTURE_IMAGE_ID_FAIL_AFTER_OUTPUT: failedInspect.idFailed ? '1' : '0',
+      FIXTURE_DIGEST_FAIL_AFTER_OUTPUT: failedInspect.digestFailed ? '1' : '0',
+      PACMAN_MONGO_CI_STATUS: 'failure',
+    });
+    assert.notEqual(failedInspectResult.status, 0, 'failed image inspection must fail closed');
+    const failedInspectRecord = recordFrom(failedInspectResult.stdout, 'mongo-image');
+    assert.equal(failedInspectRecord.image_id,
+      failedInspect.idFailed ? 'unavailable' : 'sha256:' + 'a'.repeat(64));
+    assert.equal(failedInspectRecord.image_digest,
+      failedInspect.digestFailed ? 'unavailable' : 'sha256:' + 'b'.repeat(64));
+    assert.equal(failedInspectRecord.server_version, 'unavailable');
+    assert.equal(failedInspectRecord.capture_status, 'failure', 'diagnostics must preserve the adapter outcome');
+    assert.doesNotMatch(readFileSync(callsFile, 'utf8'), /^run /m,
+      'failed image inspection must not run a version probe');
   }
 
   for (const mode of ['failure', 'timeout']) {
