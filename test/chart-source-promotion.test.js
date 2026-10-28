@@ -8,6 +8,30 @@ import { applyChartSourcePromotion, planChartSourceProposal, planChartSourceProm
 
 const digest = (letter) => `sha256:${letter.repeat(64)}`;
 
+function workflowRunScripts(workflow) {
+  const lines = workflow.split('\n');
+  const scripts = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const runLine = lines[index].match(/^ {8}run:(?:[ \t]+(.*))?$/);
+    if (!runLine) continue;
+    if (runLine[1] && runLine[1] !== '|') {
+      scripts.push(runLine[1]);
+      continue;
+    }
+    const body = [];
+    for (index += 1; index < lines.length; index += 1) {
+      const line = lines[index];
+      if (line.trim() && line.match(/^ */)[0].length < 10) {
+        index -= 1;
+        break;
+      }
+      body.push(line);
+    }
+    scripts.push(body.join('\n'));
+  }
+  return scripts;
+}
+
 test('chart source promotion preserves independent versions and skips already released versions', () => {
   assert.equal(resolveNextChartVersion('0.7.18', '0.7.17', ['pacman-0.7.18']), '0.7.19');
   assert.deepEqual(planChartSourcePromotion({
@@ -118,10 +142,10 @@ test('rollback is a verified proposal and resume requires its pending state', ()
 
 test('workflow gates proposal creation on the guard output and exposes verified rollback and resume controls', () => {
   const workflow = readFileSync(new URL('../.github/workflows/chart-source-promotion.yml', import.meta.url), 'utf8');
-  assert.match(workflow, /^  repository_dispatch:\n    types: \[pacman-release\]$/m, 'same-repository release notifications must wake the app-owned promoter');
-  assert.match(workflow, /^  release:\n    types: \[published\]$/m, 'release publication must remain a promoter trigger');
-  assert.match(workflow, /^  schedule:\n    - cron: '37 \* \* \* \*'$/m, 'scheduled reconciliation must remain enabled');
-  assert.match(workflow, /^  workflow_dispatch:\n/m, 'manual reconciliation and rollback controls must remain enabled');
+  assert.match(workflow, /^ {2}repository_dispatch:\n {4}types: \[pacman-release\]$/m, 'same-repository release notifications must wake the app-owned promoter');
+  assert.match(workflow, /^ {2}release:\n {4}types: \[published\]$/m, 'release publication must remain a promoter trigger');
+  assert.match(workflow, /^ {2}schedule:\n {4}- cron: '37 \* \* \* \*'$/m, 'scheduled reconciliation must remain enabled');
+  assert.match(workflow, /^ {2}workflow_dispatch:\n/m, 'manual reconciliation and rollback controls must remain enabled');
   assert.match(workflow, /EVENT_RELEASE_TAG: \$\{\{ github\.event\.release\.tag_name \|\| '' \}\}/);
   assert.match(workflow, /if \[\[ -z "\$release_tag" \]\]; then[\s\S]*?gh release list --repo saintdle\/pacman --limit 1/);
   assert.match(workflow, /node tools\/release-records\.js verify-app/);
@@ -135,6 +159,13 @@ test('workflow gates proposal creation on the guard output and exposes verified 
   assert.match(workflow, /if: steps\.authority\.outputs\.active == 'true' && steps\.plan\.outputs\.action != '' && steps\.plan\.outputs\.action != 'noop'/);
   assert.match(workflow, /if: steps\.authority\.outputs\.active == 'true' && steps\.plan\.outputs\.action != '' && steps\.plan\.outputs\.action != 'noop' && steps\.proposal\.outputs\.create == 'true' && steps\.pending\.outputs\.open != 'true'/);
   assert.match(workflow, /options: \[reconcile, rollback, resume\]/);
+  assert.match(workflow, /PROMOTION_MODE: \$\{\{ inputs\.mode \|\| 'reconcile' \}\}/);
+  assert.match(workflow, /ROLLBACK_APP_RECORD_REFERENCE: \$\{\{ inputs\.rollback_app_record_ref \|\| '' \}\}/);
+  assert.match(workflow, /ROLLBACK_APP_RECORD_SHA256: \$\{\{ inputs\.rollback_app_record_sha256 \|\| '' \}\}/);
+  assert.match(workflow, /<<< "\$ROLLBACK_APP_RECORD_REFERENCE"/);
+  assert.match(workflow, /"\$APP_RECORD_REFERENCE" == "\$ROLLBACK_APP_RECORD_REFERENCE" && "\$APP_RECORD_SHA256" == "\$ROLLBACK_APP_RECORD_SHA256"/);
+  assert.ok(workflowRunScripts(workflow).length > 0, 'workflow must expose shell steps for input-safety assertions');
+  assert.doesNotMatch(workflowRunScripts(workflow).join('\n'), /\$\{\{\s*inputs\./, 'manual inputs must be passed through the step environment');
   assert.match(workflow, /rollback_app_record_ref/);
   assert.match(workflow, /Rollback identity does not match the verified app release record/);
   assert.match(workflow, /branch="\$branch-\$APP_VERSION"/);
