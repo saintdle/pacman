@@ -55,13 +55,25 @@ The source-promotion workflow verifies the app's immutable release record and
 opens or updates a reviewable chart-source pull request. That proposal does
 not publish a chart. After source changes merge, the chart CI validates the
 exact Pac-Man commit; the generated publisher packages that commit and sends
-the immutable artifacts to the public distribution. A source version is
-published only after its package, record, checksum, and index entry are
-verified.
+the immutable artifacts to the public distribution. The GitHub release can
+become visible before its chart-release record, compatibility lock, and Pages
+package and index are complete; treat the version as consumer-ready only after
+the package, records, checksum, index, and public reads agree for one immutable
+identity.
 
-For a replay or recovery, first verify the current public index and immutable
-app, chart, and package identities. Reuse an existing version only when its
-bytes and record match exactly; do not replace a package, release asset, or
-tag. An older legacy app release cannot be relabeled to supply a schema-v1
-record. Publisher rollback requires a separately reviewed restoration plan
-and verification of the resulting public distribution and consumer state.
+For a completed-release replay, verify current publisher authority, the source
+commit and package identity, and every existing immutable tag and asset before
+reusing the version. For partial recovery, including when the originating run
+failed after making the release visible, use a reviewed recovery bound to the
+original validated Pac-Man source commit and package. Revalidate current source
+authority and every existing immutable tag and asset, then add only missing
+chart-release record, compatibility lock, or Pages package and index entries
+for that same identity. Preserve all existing bytes, tags, historical
+provenance, and record/lock reference pairs; verify public readiness before
+notifying consumers. If recovery requires a publisher implementation change,
+stop for a reviewed repair plan tied to the original immutable identity. Do
+not blindly rerun against the latest source or rebuild or overwrite existing
+immutable assets. An older legacy app release cannot be relabeled to supply a
+schema-v1 record. Publisher rollback requires a separately reviewed
+restoration plan and verification of the resulting public distribution and
+consumer state.
