@@ -73,16 +73,27 @@ jobs:
   adapter-tests:
     permissions:
       contents: read
-    runs-on: ubuntu-latest
+    # Temporary Mongo compatibility bridge: qualify the actual hosted kernel before Mongo starts.
+    # Retire this bridge by 2027-04-17; see https://github.com/actions/runner-images/issues/14254
+    # and https://raw.githubusercontent.com/actions/runner-images/main/images/ubuntu/Ubuntu2204-Readme.md.
+    runs-on: ${{ matrix.runner }}
     needs: lint-and-unit
     strategy:
       fail-fast: false
       matrix:
         adapter: [mongo, postgres]
+        include:
+          - adapter: mongo
+            runner: ubuntu-22.04
+          - adapter: postgres
+            runner: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ github.sha }}
+      - name: Preflight Mongo CI runtime
+        if: ${{ matrix.adapter == 'mongo' }}
+        run: bash tools/check-pacman-lifecycle.sh --mongo-runtime-preflight
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version-file: .nvmrc
@@ -92,3 +103,8 @@ jobs:
         env:
           RUN_ADAPTER_TESTS: '1'
         run: node --test --test-reporter=spec test/adapters/${{ matrix.adapter }}.test.js
+      - name: Record Mongo CI runtime metadata
+        if: ${{ always() && matrix.adapter == 'mongo' }}
+        env:
+          PACMAN_MONGO_CI_STATUS: ${{ job.status }}
+        run: bash tools/check-pacman-lifecycle.sh --mongo-runtime-metadata adapter

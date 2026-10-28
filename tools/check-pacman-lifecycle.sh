@@ -1,6 +1,326 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+mongo_runtime_kernel_release=""
+mongo_runtime_version_signature=""
+mongo_runtime_runner_image_os=""
+mongo_runtime_runner_image_version=""
+
+collect_mongo_runtime_host() {
+  mongo_runtime_kernel_release="$(uname -r 2>/dev/null || true)"
+  mongo_runtime_version_signature="$(cat /proc/version_signature 2>/dev/null | head -n 1 || true)"
+  mongo_runtime_version_signature="${mongo_runtime_version_signature:0:256}"
+  mongo_runtime_kernel_release="${mongo_runtime_kernel_release:0:128}"
+  mongo_runtime_runner_image_os="${ImageOS:-}"
+  mongo_runtime_runner_image_os="${mongo_runtime_runner_image_os:0:64}"
+  mongo_runtime_runner_image_version="${ImageVersion:-}"
+  mongo_runtime_runner_image_version="${mongo_runtime_runner_image_version:0:100}"
+}
+
+print_mongo_runtime_host_record() {
+  python3 - "${mongo_runtime_kernel_release:-}" "${mongo_runtime_version_signature:-}" \
+    "${mongo_runtime_runner_image_os:-}" "${mongo_runtime_runner_image_version:-}" <<'PY'
+import json
+import sys
+
+kernel, signature, image_os, image_version = sys.argv[1:]
+print(json.dumps({
+    "record": "host-runtime",
+    "kernel_release": kernel or "unavailable",
+    "proc_version_signature": signature or "unavailable",
+    "runner_image_os": image_os or "unavailable",
+    "runner_image_version": image_version or "unavailable",
+}, separators=(",", ":")))
+PY
+}
+
+mongo_runtime_preflight() {
+  local kernel_version=""
+  local kernel_build=""
+  local signature_version=""
+  local signature_build=""
+
+  collect_mongo_runtime_host
+  print_mongo_runtime_host_record
+
+  if [[ -z "$mongo_runtime_kernel_release" ||
+        -z "$mongo_runtime_version_signature" ||
+        -z "$mongo_runtime_runner_image_os" ||
+        -z "$mongo_runtime_runner_image_version" ]]; then
+    echo "missing Mongo CI runtime identity; kernel, proc version_signature, ImageOS, and ImageVersion are required" >&2
+    return 1
+  fi
+
+  if [[ "$mongo_runtime_kernel_release" =~ ^(6\.8\.[0-9]+)-([0-9]+) ]]; then
+    kernel_version="${BASH_REMATCH[1]}"
+    kernel_build="${BASH_REMATCH[2]}"
+  fi
+  if [[ "$mongo_runtime_version_signature" =~ ^Ubuntu[[:space:]]+(6\.8\.[0-9]+)-([0-9]+)([.-][^[:space:]]*)? ]]; then
+    signature_version="${BASH_REMATCH[1]}"
+    signature_build="${BASH_REMATCH[2]}"
+  fi
+
+  if [[ "$mongo_runtime_runner_image_os" != ubuntu22 ||
+        -z "$kernel_version" ||
+        -z "$kernel_build" ||
+        "$kernel_version" != "$signature_version" ||
+        "$kernel_build" != "$signature_build" ]]; then
+    echo "unsupported Mongo CI runtime; expected ubuntu22 with a positively identified Linux 6.8 kernel" >&2
+    return 1
+  fi
+  echo "Mongo CI runtime qualification passed: ubuntu22 Linux 6.8"
+}
+
+emit_mongo_image_record() {
+  local consumer="$1"
+  local namespace="$2"
+  local image="$3"
+  local image_id="$4"
+  local image_digest="$5"
+  local server_version="$6"
+  local capture_status="$7"
+  python3 - "$consumer" "$namespace" "$image" "$image_id" "$image_digest" \
+    "$server_version" "$capture_status" <<'PY'
+import json
+import sys
+
+consumer, namespace, image, image_id, digest, server_version, status = sys.argv[1:]
+record = {
+    "record": "mongo-image",
+    "consumer": consumer,
+    "image": image or "unavailable",
+    "image_id": image_id or "unavailable",
+    "image_digest": digest or "unavailable",
+    "server_version": server_version or "unavailable",
+    "capture_status": status,
+}
+if namespace:
+    record["namespace"] = namespace
+print(json.dumps(record, separators=(",", ":")))
+PY
+}
+
+extract_mongo_server_version() {
+  local version_output="$1"
+  local version
+  version="$(awk '$1 == "db" && $2 == "version" { sub(/^v/, "", $3); print $3; exit }' <<<"$version_output")"
+  if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][[:alnum:].-]+)?$ ]]; then
+    printf '%s' "$version"
+  else
+    printf 'unavailable'
+  fi
+}
+
+docker_bounded() {
+  local timeout_seconds="$1"
+  shift
+  python3 - "$timeout_seconds" "$@" <<'PY'
+import subprocess
+import sys
+
+try:
+    result = subprocess.run(
+        ["docker", *sys.argv[2:]],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        timeout=float(sys.argv[1]),
+        check=False,
+    )
+except subprocess.TimeoutExpired:
+    raise SystemExit(124)
+if result.returncode == 0:
+    sys.stdout.write(result.stdout)
+raise SystemExit(result.returncode)
+PY
+}
+
+mongo_adapter_server_version_probe() {
+  local image_id="$1"
+  python3 - "$image_id" <<'PY'
+import re
+import subprocess
+import sys
+import uuid
+
+image_id = sys.argv[1]
+label_key = "com.pacman.mongo-metadata-probe"
+token = uuid.uuid4().hex
+name = f"pacman-mongo-metadata-{token}"
+probe_command = [
+    "docker", "run", "--pull=never", "--name", name,
+    "--label", f"{label_key}={token}", "--rm", "--entrypoint", "mongod",
+    image_id, "--version",
+]
+try:
+    probe = subprocess.run(
+        probe_command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        timeout=9.0,
+        check=False,
+    )
+except subprocess.TimeoutExpired:
+    probe = None
+
+if probe is not None and probe.returncode == 0:
+    sys.stdout.write(probe.stdout)
+    raise SystemExit(0)
+
+# A failed or timed-out Docker client may leave its named container running.
+# Remove it only after its random ownership label and immutable ID are verified.
+try:
+    inspect = subprocess.run(
+        ["docker", "inspect", "--format", f"{{{{index .Config.Labels \"{label_key}\"}}}} {{{{.Id}}}}", name],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        timeout=2.0,
+        check=False,
+    )
+except subprocess.TimeoutExpired:
+    inspect = None
+
+if inspect is not None and inspect.returncode == 0:
+    fields = inspect.stdout.strip().split()
+    if len(fields) == 2 and fields[0] == token and re.fullmatch(r"[a-f0-9]{64}", fields[1]):
+        try:
+            subprocess.run(
+                ["docker", "rm", "--force", fields[1]],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=2.0,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            pass
+
+raise SystemExit(1)
+PY
+}
+
+mongo_adapter_runtime_metadata() {
+  local image="mongo:8"
+  local capture_status="${PACMAN_MONGO_CI_STATUS:-unknown}"
+  local image_id=""
+  local repo_digests=""
+  local image_digest="unavailable"
+  local server_version="unavailable"
+  local version_output=""
+
+  case "$capture_status" in
+    success|failure|cancelled) ;;
+    *) capture_status=unknown ;;
+  esac
+
+  image_id="$(docker_bounded 4.5 image inspect --format '{{.Id}}' "$image" || true)"
+  repo_digests="$(docker_bounded 4.5 image inspect --format '{{join .RepoDigests "\n"}}' "$image" || true)"
+  if [[ ! "$image_id" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+    image_id="unavailable"
+  fi
+  while IFS= read -r repo_digest; do
+    if [[ "$repo_digest" =~ @sha256:([a-f0-9]{64})$ ]]; then
+      image_digest="sha256:${BASH_REMATCH[1]}"
+      break
+    fi
+  done <<<"$repo_digests"
+
+  if [[ "$image_id" != unavailable && "$image_digest" != unavailable ]]; then
+    version_output="$(mongo_adapter_server_version_probe "$image_id" || true)"
+    server_version="$(extract_mongo_server_version "$version_output")"
+  fi
+  emit_mongo_image_record adapter "" "$image" "$image_id" "$image_digest" "$server_version" "$capture_status"
+  [[ "$image_id" != unavailable && "$image_digest" != unavailable ]]
+}
+
+mongo_lifecycle_runtime_metadata() {
+  local namespace="$1"
+  local kubeconfig="${2:-}"
+  local capture_status="${3:-observed}"
+  local -a kubectl_prefix=()
+  if [[ -n "$kubeconfig" ]]; then
+    kubectl_prefix+=(--kubeconfig "$kubeconfig")
+  fi
+
+  local pod_data=""
+  local pod_name=""
+  local image="unavailable"
+  local image_id="unavailable"
+  local image_digest="unavailable"
+  local server_version="unavailable"
+  local version_output=""
+
+  pod_data="$(kubectl "${kubectl_prefix[@]}" --request-timeout=15s -n "$namespace" get pods -o json 2>/dev/null \
+    | python3 -c '
+import json, sys
+payload = json.load(sys.stdin)
+for pod in payload.get("items", []):
+    containers = pod.get("spec", {}).get("containers", [])
+    statuses = pod.get("status", {}).get("containerStatuses", [])
+    mongo = next((item for item in containers if item.get("name") == "mongo"), None)
+    if mongo is None:
+        continue
+    status = next((item for item in statuses if item.get("name") == "mongo"), {})
+    print(pod.get("metadata", {}).get("name", ""), mongo.get("image", ""), status.get("imageID", ""), sep="\t")
+    break
+' 2>/dev/null || true)"
+  IFS=$'\t' read -r pod_name image image_id <<<"$pod_data" || true
+  if [[ "$image" == "mongo:8" || "$image" == "docker.io/library/mongo:8" ]]; then
+    if [[ "$image_id" =~ ^(docker-pullable|containerd|docker)://[^[:space:]@]+@sha256:([a-f0-9]{64})$ ]]; then
+      image_digest="sha256:${BASH_REMATCH[2]}"
+    elif [[ "$image_id" =~ ^[^[:space:]@]+@sha256:([a-f0-9]{64})$ ]]; then
+      image_digest="sha256:${BASH_REMATCH[1]}"
+    elif [[ "$image_id" =~ ^(containerd|docker)://sha256:([a-f0-9]{64})$ ]]; then
+      image_digest="sha256:${BASH_REMATCH[2]}"
+    elif [[ "$image_id" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+      image_digest="$image_id"
+    else
+      image_id="unavailable"
+    fi
+  else
+    image="unavailable"
+    image_id="unavailable"
+  fi
+  if [[ -n "$pod_name" ]]; then
+    version_output="$(kubectl "${kubectl_prefix[@]}" --request-timeout=15s -n "$namespace" exec "$pod_name" -c mongo -- mongod --version 2>/dev/null || true)"
+    server_version="$(extract_mongo_server_version "$version_output")"
+  fi
+
+  emit_mongo_image_record chart-lifecycle "$namespace" "$image" "$image_id" \
+    "$image_digest" "$server_version" "$capture_status"
+  [[ "$image" != unavailable && "$image_id" != unavailable && "$image_digest" != unavailable ]]
+}
+
+if [[ "${1:-}" == --mongo-runtime-preflight ]]; then
+  [[ $# -eq 1 ]] || { echo "usage: $0 --mongo-runtime-preflight" >&2; exit 2; }
+  mongo_runtime_preflight
+  exit
+fi
+if [[ "${1:-}" == --mongo-runtime-metadata ]]; then
+  shift
+  case "${1:-}" in
+    adapter)
+      [[ $# -eq 1 ]] || { echo "usage: $0 --mongo-runtime-metadata adapter" >&2; exit 2; }
+      collect_mongo_runtime_host
+      print_mongo_runtime_host_record
+      mongo_adapter_runtime_metadata
+      exit
+      ;;
+    lifecycle)
+      [[ $# -ge 2 && $# -le 3 ]] || { echo "usage: $0 --mongo-runtime-metadata lifecycle <namespace> [success|failed]" >&2; exit 2; }
+      collect_mongo_runtime_host
+      print_mongo_runtime_host_record
+      mongo_lifecycle_runtime_metadata "$2" "" "${3:-observed}"
+      exit
+      ;;
+    *)
+      echo "usage: $0 --mongo-runtime-metadata <adapter|lifecycle> ..." >&2
+      exit 2
+      ;;
+  esac
+fi
+
 if [[ $# -ne 3 ]]; then
   echo "usage: $0 <chart-dir> <candidate-source-dir> <mongo|postgres>" >&2
   exit 2
@@ -14,6 +334,10 @@ case "$database" in
   mongo|postgres) ;;
   *) echo "unsupported database backend: $database" >&2; exit 2 ;;
 esac
+
+if [[ "$database" == mongo ]]; then
+  mongo_runtime_preflight
+fi
 
 existing_secret_key="$database.existingSecret"
 rendered_existing_secret="$(helm template lifecycle-existing-secret "$chart_dir" \
@@ -84,6 +408,9 @@ cleanup() {
   local status=$?
   trap - EXIT INT TERM
   stop_watch
+  if (( status != 0 )) && [[ "$database" == mongo ]]; then
+    mongo_lifecycle_runtime_metadata "$current_namespace" "$tmp_dir/kubeconfig" failed >&2 || true
+  fi
   if (( status != 0 )); then
     dump_diagnostics
   fi
@@ -624,6 +951,9 @@ run_mode() {
     assert_migrations "$namespace"
   fi
 
+  if [[ "$database" == mongo ]]; then
+    mongo_lifecycle_runtime_metadata "$namespace" "$tmp_dir/kubeconfig" success
+  fi
   kubectl --kubeconfig "$tmp_dir/kubeconfig" delete namespace "$namespace" \
     --wait=true --timeout=2m
   if kubectl --kubeconfig "$tmp_dir/kubeconfig" get namespace "$namespace" >/dev/null 2>&1; then

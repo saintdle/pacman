@@ -11,6 +11,9 @@ const versionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const commitPattern = /^[a-f0-9]{40}$/;
 const digestPattern = /^sha256:[a-f0-9]{64}$/;
 const apiBase = 'https://api.github.com';
+const dispatchPath = '/repos/saintdle/helm-charts/dispatches';
+const maxDispatchProperties = 10;
+const maxDispatchBytes = 65536;
 
 function fail(message) {
   throw new Error(message);
@@ -61,21 +64,47 @@ function parseChartSource(chartYaml, valuesYaml) {
 
 async function request(url, { token, fetch: fetchRequest = fetch, body, method = 'GET', accept = 'application/vnd.github+json', contentType = 'application/json', allow404 = false } = {}) {
   if (!token) fail('RELEASE_AUTOMATION_TOKEN is required for chart artifact handoff');
-  const response = await fetchRequest(url.startsWith('http') ? url : `${apiBase}${url}`, {
-    method,
-    body,
-    headers: {
-      Accept: accept,
-      Authorization: `Bearer ${token}`,
-      'X-GitHub-Api-Version': '2022-11-28',
-      ...(body ? { 'Content-Type': contentType } : {}),
-    },
-  });
+  let response;
+  try {
+    response = await fetchRequest(url.startsWith('http') ? url : `${apiBase}${url}`, {
+      method,
+      body,
+      headers: {
+        Accept: accept,
+        Authorization: `Bearer ${token}`,
+        'X-GitHub-Api-Version': '2022-11-28',
+        ...(body ? { 'Content-Type': contentType } : {}),
+      },
+    });
+  } catch {
+    fail(`${method} ${safeRequestPath(url)} failed: network error`);
+  }
   if (allow404 && response.status === 404) return null;
-  if (!response.ok) fail(`GitHub API request failed: HTTP ${response.status}`);
+  if (!response.ok) fail(`${method} ${safeRequestPath(url)} failed: HTTP ${response.status}`);
   if (response.status === 204) return null;
   if (accept === 'application/octet-stream') return Buffer.from(await response.arrayBuffer());
   return response.json();
+}
+
+function safeRequestPath(url) {
+  try {
+    return new URL(url.startsWith('http') ? url : `${apiBase}${url}`).pathname;
+  } catch {
+    return '/<invalid-url>';
+  }
+}
+
+function serializeRepositoryDispatch(payload) {
+  const propertyCount = Object.keys(payload.client_payload).length;
+  if (propertyCount > maxDispatchProperties) {
+    fail(`POST ${dispatchPath} rejected before request: client_payload has ${propertyCount} properties; limit is ${maxDispatchProperties}`);
+  }
+  const body = JSON.stringify(payload);
+  const byteCount = Buffer.byteLength(body, 'utf8');
+  if (byteCount >= maxDispatchBytes) {
+    fail(`POST ${dispatchPath} rejected before request: request body is ${byteCount} UTF-8 bytes; limit is less than ${maxDispatchBytes}`);
+  }
+  return body;
 }
 
 async function verifyCandidateRun({ sourceCommit, event, token, fetch: fetchRequest = fetch }) {
@@ -227,25 +256,28 @@ export async function publishPacmanChartArtifact({ event, sourceRoot, token, fet
     const payload = {
       event_type: 'pacman-chart-artifact',
       client_payload: {
-        chart_name: 'pacman',
-        chart_version: chartSource.chartVersion,
-        app_version: chartSource.appVersion,
-        image_digest: chartSource.imageDigest,
-        source_repository: 'saintdle/pacman',
-        source_commit: sourceCommit,
-        source_package_reference: sourcePackageReference,
-        package_sha256: packageChecksum,
-        app_record_reference: appRecord.reference,
-        app_record_sha256: appRecord.checksum,
-        source_identity_reference: `https://github.com/saintdle/pacman/releases/download/${tag}/${identityFilename}`,
-        source_identity_sha256: sha256(identityBytes),
+        schema_version: 1,
+        artifact: {
+          chart_name: 'pacman',
+          chart_version: chartSource.chartVersion,
+          app_version: chartSource.appVersion,
+          image_digest: chartSource.imageDigest,
+          source_repository: 'saintdle/pacman',
+          source_commit: sourceCommit,
+          source_package_reference: sourcePackageReference,
+          package_sha256: packageChecksum,
+          app_record_reference: appRecord.reference,
+          app_record_sha256: appRecord.checksum,
+          source_identity_reference: `https://github.com/saintdle/pacman/releases/download/${tag}/${identityFilename}`,
+          source_identity_sha256: sha256(identityBytes),
+        },
       },
     };
-    await request('/repos/saintdle/helm-charts/dispatches', {
+    await request(dispatchPath, {
       token,
       fetch: fetchRequest,
       method: 'POST',
-      body: JSON.stringify(payload),
+      body: serializeRepositoryDispatch(payload),
     });
     return { status: 'dispatched', sourceCommit, chartVersion: chartSource.chartVersion, appVersion: chartSource.appVersion, packageChecksum, candidateRunId: candidate.runId };
   } finally {
