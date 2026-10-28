@@ -147,7 +147,7 @@ test('workflow gates proposal creation on the guard output and exposes verified 
   assert.match(workflow, /^ {2}schedule:\n {4}- cron: '37 \* \* \* \*'$/m, 'scheduled reconciliation must remain enabled');
   assert.match(workflow, /^ {2}workflow_dispatch:\n/m, 'manual reconciliation and rollback controls must remain enabled');
   assert.match(workflow, /EVENT_RELEASE_TAG: \$\{\{ github\.event\.release\.tag_name \|\| '' \}\}/);
-  assert.match(workflow, /if \[\[ -z "\$release_tag" \]\]; then[\s\S]*?gh release list --repo saintdle\/pacman --limit 1/);
+  assert.match(workflow, /if \[\[ -z "\$release_tag" \]\]; then[\s\S]*?gh release list --repo saintdle\/pacman --limit 1 --exclude-drafts --exclude-pre-releases/);
   assert.match(workflow, /node tools\/release-records\.js verify-app/);
   assert.doesNotMatch(workflow, /github\.event\.client_payload/, 'dispatch payload must not select or supply release authority');
   assert.match(workflow, /id: proposal/);

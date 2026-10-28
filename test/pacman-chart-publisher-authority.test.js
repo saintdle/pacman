@@ -44,7 +44,7 @@ test('chart CI is only a candidate validator; publisher jobs have one authority 
   assert.doesNotMatch(releaseWorkflow, /RELEASE_AUTOMATION_TOKEN|saintdle\/helm-charts/);
   assert.match(promotionWorkflow, /repository_dispatch:\n\s+types: \[pacman-release\]/);
   assert.match(promotionWorkflow, /EVENT_RELEASE_TAG: \$\{\{ github\.event\.release\.tag_name \|\| '' \}\}/);
-  assert.match(promotionWorkflow, /gh release list --repo saintdle\/pacman --limit 1/);
+  assert.match(promotionWorkflow, /gh release list --repo saintdle\/pacman --limit 1 --exclude-drafts --exclude-pre-releases/);
   assert.match(promotionWorkflow, /node tools\/release-records\.js verify-app/);
   assert.doesNotMatch(promotionWorkflow, /github\.event\.client_payload/);
   assert.match(sourceWorkflow, /workflow_run:/);
@@ -97,6 +97,21 @@ test('publisher authority checker accepts the guarded app notification and rejec
       'release.yml',
       (workflow) => workflow.replace("if: steps.policy.outputs.dispatch == 'true' && steps.image.outcome == 'success'", 'if: always()'),
       /release notification must require the release policy and successful image build/,
+    );
+    expectRejected(
+      'wrong notification token',
+      'release.yml',
+      (workflow) => workflow.replace('GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}', 'GITHUB_TOKEN: ${{ secrets.WRONG_TOKEN }}'),
+      /release notification must use the same-app GITHUB_TOKEN/,
+    );
+    expectRejected(
+      'reintroduced cross-repository notification token',
+      'release.yml',
+      (workflow) => workflow.replace(
+        '          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n',
+        '          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n          RELEASE_AUTOMATION_TOKEN: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}\n',
+      ),
+      /release notification must not use a cross-repository publisher token or destination/,
     );
     expectRejected(
       'mismatched promoter event',

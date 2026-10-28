@@ -75,7 +75,7 @@ jobs:
             [[ -n "$release_tag" ]] || { echo 'Rollback requires a schema-v1 app-record release URL.' >&2; exit 1; }
           fi
           if [[ -z "$release_tag" ]]; then
-            release_tag=$(gh release list --repo saintdle/pacman --limit 1 --json tagName --jq '.[0].tagName')
+            release_tag=$(gh release list --repo saintdle/pacman --limit 1 --exclude-drafts --exclude-pre-releases --json tagName --jq '.[0].tagName')
           fi
           [[ "$release_tag" == pacman-v* ]] || {
             echo "No Pac-Man release is available for chart source promotion." >&2
