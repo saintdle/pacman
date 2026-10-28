@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -63,7 +63,7 @@ function assertReleaseWorkflowFailClosed(workflow) {
 
   assert.match(releaseJob, /Build and publish multi-architecture image\n\s+id: build\n\s+if: steps\.policy\.outputs\.publish == 'true'/);
   assert.match(releaseJob, /Create GitHub release\n\s+if: steps\.policy\.outputs\.create_release == 'true'/);
-  assert.match(releaseJob, /Dispatch Helm chart promotion\n\s+if: steps\.policy\.outputs\.dispatch == 'true' && steps\.image\.outcome == 'success'/);
+  assert.match(releaseJob, /Notify app-owned chart source promoter\n\s+if: steps\.policy\.outputs\.dispatch == 'true' && steps\.image\.outcome == 'success'/);
   assert.match(releaseJob, /Set up Docker Buildx\n\s+if: steps\.policy\.outputs\.verify_image == 'true'/);
   assert.match(releaseJob, /Verify published manifest list\n\s+id: image\n\s+if: steps\.policy\.outputs\.verify_image == 'true'/);
   assert.match(releaseJob, /node tools\/release-policy\.js verify-digest/);
@@ -82,13 +82,22 @@ function assertReleaseWorkflowFailClosed(workflow) {
     'Resolve immutable app release record',
     'Write release metadata',
     'Create GitHub release',
-    'Dispatch Helm chart promotion',
+    'Notify app-owned chart source promoter',
   ].map((name) => releaseJob.indexOf(`- name: ${name}`));
   assert.ok(stepOrder.every((index) => index >= 0), 'record and release steps must all be present');
   assert.deepEqual(stepOrder, [...stepOrder].sort((left, right) => left - right), 'the version guard precedes image publication, then records follow signing and precede release publication and dispatch');
   assert.doesNotMatch(releaseJob, /if:.*always\(\)/, 'release side effects must not override policy outputs with always()');
   assert.deepEqual([...jobs.keys()].sort(), ['release', 'validate']);
   return releaseJob;
+}
+
+function releaseNotificationStep(workflow) {
+  const job = workflowJobs(workflow).get('release');
+  const step = /- name: Notify app-owned chart source promoter\n([\s\S]*?)(?=\n {6}- name:|$)/.exec(job)?.[1];
+  assert.ok(step, 'release must include the guarded chart source notification');
+  const run = /^ {8}run: \|\n((?: {10}.*(?:\n|$))*)/m.exec(step)?.[1];
+  assert.ok(run, 'chart source notification must have an executable shell body');
+  return { step, script: run.replace(/^ {10}/gm, '') };
 }
 
 function stubEffects() {
@@ -210,6 +219,65 @@ test('a successful candidate requests one image publication and one downstream d
   assert.equal(events.filter((event) => event === 'move-latest').length, 1);
   assert.equal(events.filter((event) => event === 'create-release').length, 1);
   assert.equal(events.filter((event) => event === 'dispatch').length, 1);
+});
+
+test('release notification dispatches only a same-repository pacman-release hint with GITHUB_TOKEN', () => {
+  const { step, script } = releaseNotificationStep(release);
+  assert.match(step, /^ {8}if: steps\.policy\.outputs\.dispatch == 'true' && steps\.image\.outcome == 'success'$/m);
+  assert.match(step, /^ {8}env:\n {10}GITHUB_TOKEN: \$\{\{ secrets\.GITHUB_TOKEN \}\}$/m);
+  assert.doesNotMatch(step, /RELEASE_AUTOMATION_TOKEN|helm-charts|client_payload/);
+  assert.match(script, /test -n "\$GITHUB_TOKEN"/);
+
+  const directory = mkdtempSync(join(tmpdir(), 'pacman-release-notification-'));
+  const binDirectory = join(directory, 'bin');
+  const curlArgsPath = join(directory, 'curl-args.txt');
+  const jqArgsPath = join(directory, 'jq-args.txt');
+  const curlPath = join(binDirectory, 'curl');
+  const jqPath = join(binDirectory, 'jq');
+
+  try {
+    mkdirSync(binDirectory, { recursive: true });
+    writeFileSync(curlPath, '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$STUB_CURL_ARGS"\n', { mode: 0o755 });
+    writeFileSync(jqPath, '#!/bin/sh\nprintf \'%s\\n\' "$*" > "$STUB_JQ_ARGS"\nprintf \'%s\\n\' \'{"event_type":"pacman-release"}\'\n', { mode: 0o755 });
+
+    const env = {
+      ...process.env,
+      PATH: `${binDirectory}:${process.env.PATH}`,
+      STUB_CURL_ARGS: curlArgsPath,
+      STUB_JQ_ARGS: jqArgsPath,
+      GITHUB_TOKEN: 'fixture-workflow-token',
+    };
+    const result = spawnSync('bash', ['-euo', 'pipefail', '-c', script], { encoding: 'utf8', env });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(readFileSync(jqArgsPath, 'utf8').trim(), '-n {event_type: "pacman-release"}');
+    assert.deepEqual(readFileSync(curlArgsPath, 'utf8').trimEnd().split('\n'), [
+      '--fail-with-body',
+      '--silent',
+      '--show-error',
+      '-X',
+      'POST',
+      '-H',
+      'Accept: application/vnd.github+json',
+      '-H',
+      'Authorization: Bearer fixture-workflow-token',
+      '-H',
+      'X-GitHub-Api-Version: 2022-11-28',
+      'https://api.github.com/repos/saintdle/pacman/dispatches',
+      '-d',
+      '{"event_type":"pacman-release"}',
+    ]);
+
+    rmSync(curlArgsPath, { force: true });
+    rmSync(jqArgsPath, { force: true });
+    const missingToken = spawnSync('bash', ['-euo', 'pipefail', '-c', script], {
+      encoding: 'utf8',
+      env: { ...env, GITHUB_TOKEN: '' },
+    });
+    assert.notEqual(missingToken.status, 0, 'notification must fail closed without its repository token');
+    assert.equal(existsSync(curlArgsPath), false, 'missing token must stop before curl');
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test('an older immutable replay verifies its image without pushing, moving latest, or dispatching', async () => {

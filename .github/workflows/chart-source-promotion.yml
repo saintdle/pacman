@@ -1,6 +1,8 @@
 name: Reconcile Pac-Man chart source
 
 on:
+  repository_dispatch:
+    types: [pacman-release]
   release:
     types: [published]
   schedule:
@@ -63,15 +65,17 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.RELEASE_AUTOMATION_TOKEN }}
           EVENT_RELEASE_TAG: ${{ github.event.release.tag_name || '' }}
+          PROMOTION_MODE: ${{ inputs.mode || 'reconcile' }}
+          ROLLBACK_APP_RECORD_REFERENCE: ${{ inputs.rollback_app_record_ref || '' }}
         run: |
           set -euo pipefail
           release_tag="$EVENT_RELEASE_TAG"
-          if [[ "${{ inputs.mode || 'reconcile' }}" == rollback ]]; then
-            release_tag=$(sed -nE 's#^https://github.com/saintdle/pacman/releases/download/(pacman-v[0-9]+\.[0-9]+\.[0-9]+)/app-release-record\.json$#\1#p' <<< "${{ inputs.rollback_app_record_ref || '' }}")
+          if [[ "$PROMOTION_MODE" == rollback ]]; then
+            release_tag=$(sed -nE 's#^https://github.com/saintdle/pacman/releases/download/(pacman-v[0-9]+\.[0-9]+\.[0-9]+)/app-release-record\.json$#\1#p' <<< "$ROLLBACK_APP_RECORD_REFERENCE")
             [[ -n "$release_tag" ]] || { echo 'Rollback requires a schema-v1 app-record release URL.' >&2; exit 1; }
           fi
           if [[ -z "$release_tag" ]]; then
-            release_tag=$(gh release list --repo saintdle/pacman --limit 1 --json tagName --jq '.[0].tagName')
+            release_tag=$(gh release list --repo saintdle/pacman --limit 1 --exclude-drafts --exclude-pre-releases --json tagName --jq '.[0].tagName')
           fi
           [[ "$release_tag" == pacman-v* ]] || {
             echo "No Pac-Man release is available for chart source promotion." >&2
@@ -172,6 +176,8 @@ jobs:
           APP_RECORD_SHA256: ${{ steps.record.outputs.sha256 }}
           SOURCE_COMMIT: ${{ steps.release.outputs.SOURCE_COMMIT }}
           PROMOTION_MODE: ${{ inputs.mode || 'reconcile' }}
+          ROLLBACK_APP_RECORD_REFERENCE: ${{ inputs.rollback_app_record_ref || '' }}
+          ROLLBACK_APP_RECORD_SHA256: ${{ inputs.rollback_app_record_sha256 || '' }}
           ROLLBACK_REASON: ${{ inputs.rollback_reason || '' }}
           PENDING_STATE: ${{ steps.pending.outputs.state || '' }}
           CURRENT_STATE: ${{ steps.current-state.outputs.state || '' }}
@@ -182,7 +188,7 @@ jobs:
           set -euo pipefail
           RELEASED_CHART_TAGS=$(gh release list --repo saintdle/helm-charts --limit 100 --json tagName --jq '[.[].tagName | select(startswith("pacman-"))] | join(",")')
           if [[ "$PROMOTION_MODE" == rollback ]]; then
-            [[ "$APP_RECORD_REFERENCE" == "${{ inputs.rollback_app_record_ref || '' }}" && "$APP_RECORD_SHA256" == "${{ inputs.rollback_app_record_sha256 || '' }}" ]] || {
+            [[ "$APP_RECORD_REFERENCE" == "$ROLLBACK_APP_RECORD_REFERENCE" && "$APP_RECORD_SHA256" == "$ROLLBACK_APP_RECORD_SHA256" ]] || {
               echo 'Rollback identity does not match the verified app release record.' >&2
               exit 1
             }
