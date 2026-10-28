@@ -24,23 +24,34 @@ process when `DB_TYPE=memory` (the default).
 
 ## Releases
 
-Merging a pull request into `main` runs the release workflow. Before it builds
-or publishes an image, the workflow runs lint, unit tests, and both MongoDB and
-PostgreSQL adapter suites against the exact commit being released. A failed
-check blocks image publication, GitHub release creation, and chart promotion.
+The application release workflow runs on `main` pushes that change app build or
+runtime inputs, and also starts for changes under `charts/pacman/`. On a push,
+the release resolver selects an app release only when app runtime inputs
+changed. These
+include the image build, dependency files, protocol, app source, browser assets,
+and demo runtime inputs; docs-only and test-only changes by themselves do not
+select an app release. A chart-only change skips the app image and version;
+chart CI and the generated chart publisher handle it independently.
 
-Unless the pull request changes the `version` field in `package.json`, the
-workflow increments the highest published Pac-Man release by one patch version.
-For example, a published `0.7.5` becomes `0.7.6` automatically. Replaying a
-commit that already has a release reuses that release's recorded image digest
-and version tag. It does not depend on the current `latest` image or move that
-tag.
+For an eligible app release, the workflow runs lint, unit tests, and both
+MongoDB and PostgreSQL adapter suites against the exact commit. A failed check
+blocks image publication, GitHub release creation, and chart promotion. When an
+eligible runtime change does not set a version override, the resolver
+increments the greater of the current app version and highest published app
+version by one patch. For example, a published `0.7.5` becomes `0.7.6` when the
+current app version is not higher. Replaying a commit that already has a
+release reuses that release's recorded image digest and version tag; it does
+not depend on or move the mutable image `latest` tag.
 
-To request a minor or major release, change both `package.json` and
-`package-lock.json` in the pull request, for example from `0.7.5` to `0.8.0`.
-The reviewed `package.json` version is the release override. The workflow
-rejects an out-of-order version, an unsynchronised lockfile, or a reused release
-tag.
+For a runtime-eligible app release, changing `package.json` from its previous
+version sets the reviewed release-version override. Keep `package-lock.json`
+synchronized; the workflow rejects an out-of-order override, an unsynchronized
+lockfile, or a reused release tag. For example, change both files from `0.7.5`
+to `0.8.0` to request that minor version.
+
+A manual release is also available through workflow dispatch on `main`. Choose
+an explicit `patch`, `minor`, or `major` bump; the selected bump does not depend
+on an app runtime path change.
 
 Each release publishes one `linux/amd64` and `linux/arm64` manifest list under
 the version tag and moves `latest` to that same manifest list. The image is
