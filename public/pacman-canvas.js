@@ -337,6 +337,16 @@ function geronimo() {
                 if (msg && typeof msg.allowEbeeModeOverride === 'boolean') {
                     game.allowEbeeModeOverride = msg.allowEbeeModeOverride;
                 }
+                if (msg && typeof msg.ghostsReleaseAll === 'boolean') {
+                    game.ghostsReleaseAll = msg.ghostsReleaseAll;
+                }
+                if (msg && PacmanMovement.GHOST_DIFFICULTIES.indexOf(msg.ghostDifficulty) !== -1) {
+                    game.ghostDifficulty = msg.ghostDifficulty;
+                }
+                // The first init() runs before this response arrives. Re-run it
+                // while idle so ghost speed and timers use the server's values;
+                // a game already in progress picks them up on its next init().
+                if (game.map && !game.running) game.init(0);
                 if (msg && msg.appRole) game.appRole = msg.appRole;
                 if (msg && msg.appVersion) game.appVersion = msg.appVersion;
                 if (msg && msg.appVariant) game.appVariant = msg.appVariant;
@@ -396,6 +406,8 @@ function geronimo() {
             allowClientOverride: game.allowClientOverride,
             ebeeMode: game.serverEbeeMode,
             allowEbeeModeOverride: game.allowEbeeModeOverride,
+            ghostsReleaseAll: game.ghostsReleaseAll,
+            ghostDifficulty: game.ghostDifficulty,
             effectiveMaxLevel: game.maxLevel,
             effectiveEbeeMode: game.ebeeMode,
             appRole: game.appRole,
@@ -627,6 +639,9 @@ function geronimo() {
         this.serverEbeeMode = false;
         this.allowEbeeModeOverride = true;
         this.ebeeMode = false;
+        // Server-authoritative ghost behaviour, filled from GET /config.
+        this.ghostsReleaseAll = false;
+        this.ghostDifficulty = 'classic';
         this.appRole = 'web';
         this.appVersion = 'dev';
         this.appVariant = 'stable';
@@ -666,14 +681,29 @@ function geronimo() {
         this.ghostFrightenedTimer = 240;
         this.ghostMode = 0;            // 0 = Scatter, 1 = Chase
         this.ghostModeTimer = 200;    // decrements each animationLoop execution
-        this.ghostSpeedNormal = (this.level > 4 ? 3 : 2);    // global default for ghost speed
+        this.ghostSpeedNormal = 2;    // global default for ghost speed (see applyGhostSettings)
         this.ghostSpeedDazzled = 2; // global default for ghost speed when dazzled
+        this.ghostScatterFrames = 200;
+        this.ghostChaseFrames = 650;
+        this.ghostFrightenedFrames = 240;
+        this.ghostModeSwitchMinLevel = 2;
+
+        // Derive speed and timing from the server's GHOST_DIFFICULTY and the
+        // current level. Call before ghosts are created or reset.
+        this.applyGhostSettings = function() {
+            var s = PacmanMovement.getGhostSettings(this.ghostDifficulty, this.level);
+            this.ghostSpeedNormal = s.speed;
+            this.ghostScatterFrames = s.scatterFrames;
+            this.ghostChaseFrames = s.chaseFrames;
+            this.ghostFrightenedFrames = s.frightenedFrames;
+            this.ghostModeSwitchMinLevel = s.modeSwitchMinLevel;
+        };
 
         /* Game Functions */
         this.startGhostFrightened = function() {
             console.log("ghost frigthened");
             this.ghostFrightened = true;
-            this.ghostFrightenedTimer = 240;
+            this.ghostFrightenedTimer = this.ghostFrightenedFrames;
             inky.dazzle();
             pinky.dazzle();
             blinky.dazzle();
@@ -696,7 +726,7 @@ function geronimo() {
                 this.ghostFrightenedTimer--;
                 if (this.ghostFrightenedTimer === 0) {
                     this.endGhostFrightened();
-                    this.ghostFrigthenedTimer = 240;
+                    this.ghostFrightenedTimer = this.ghostFrightenedFrames;
                     /*inky.reverseDirection();
                     pinky.reverseDirection();
                     clyde.reverseDirection();
@@ -705,9 +735,9 @@ function geronimo() {
             }
             // always decrement ghostMode timer
             this.ghostModeTimer--;
-            if (this.ghostModeTimer === 0 && game.level > 1) {
+            if (this.ghostModeTimer === 0 && game.level >= this.ghostModeSwitchMinLevel) {
                 this.ghostMode ^= 1;
-                this.ghostModeTimer = 200 + this.ghostMode * 450;
+                this.ghostModeTimer = this.ghostMode ? this.ghostChaseFrames : this.ghostScatterFrames;
                 console.log("ghostMode=" + this.ghostMode);
 
                 game.buildWalls();
@@ -980,10 +1010,11 @@ function geronimo() {
 
             game.drawHearts(pacman.lives);
 
+            this.applyGhostSettings();
             this.ghostFrightened = false;
-            this.ghostFrightenedTimer = 240;
+            this.ghostFrightenedTimer = this.ghostFrightenedFrames;
             this.ghostMode = 0;            // 0 = Scatter, 1 = Chase
-            this.ghostModeTimer = 200;    // decrements each animationLoop execution
+            this.ghostModeTimer = this.ghostScatterFrames;    // decrements each animationLoop execution
 
             // initalize Ghosts, avoid memory flooding
             if (pinky === null || pinky === undefined) {
@@ -1278,15 +1309,15 @@ function geronimo() {
             // leave Ghost House
             if (this.ghostHouse == true) {
 
-                // Clyde does not start chasing before 2/3 of all pills are eaten and if level is < 4
-                if (this.name == "clyde") {
-                    if ((game.level < 4) || ((game.pillCount > 104/3))) this.stop = true;
-                    else this.stop = false;
-                }
-                // Inky starts after 30 pills and only from the third level on
-                if (this.name == "inky") {
-                    if ((game.level < 3) || ((game.pillCount > 104-30))) this.stop = true;
-                    else this.stop = false;
+                // Inky and Clyde wait for a level/pill threshold unless the
+                // server sets GHOSTS_RELEASE_ALL (see ghostMayLeaveHouse).
+                if (this.name == "clyde" || this.name == "inky") {
+                    this.stop = !PacmanMovement.ghostMayLeaveHouse({
+                        name: this.name,
+                        level: game.level,
+                        pillCount: game.pillCount,
+                        releaseAll: game.ghostsReleaseAll
+                    });
                 }
 
                 if ((this.getGridPosY() == 5) && this.inGrid()) {
@@ -1603,7 +1634,7 @@ function geronimo() {
         }
         this.enableBeastMode = function() {
             this.beastMode = true;
-            this.beastModeTimer = 240;
+            this.beastModeTimer = game.ghostFrightenedFrames;
             //console.log("Beast Mode activated!");
             inky.dazzle();
             pinky.dazzle();

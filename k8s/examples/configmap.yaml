@@ -8,6 +8,8 @@ data:
   ALLOW_CLIENT_CONFIG_OVERRIDE: "false"
   EBEE_MODE: "true"
   ALLOW_CLIENT_EBEE_MODE_OVERRIDE: "false"
+  GHOSTS_RELEASE_ALL: "false"
+  GHOST_DIFFICULTY: "classic"
   APP_VARIANT: "stable"
   APP_COLOR: "#ffcc00"
   DEMO_SECURITY_MODE: "true"

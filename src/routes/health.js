@@ -82,6 +82,8 @@ export function healthRouter() {
         allowClientOverride: config.ALLOW_CLIENT_CONFIG_OVERRIDE,
         ebeeMode: config.EBEE_MODE,
         allowEbeeModeOverride: config.ALLOW_CLIENT_EBEE_MODE_OVERRIDE,
+        ghostsReleaseAll: config.GHOSTS_RELEASE_ALL,
+        ghostDifficulty: config.GHOST_DIFFICULTY,
       },
     });
   });

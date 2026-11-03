@@ -549,11 +549,15 @@ test('GET /config exposes maxLevel from server config', async () => {
   assert.equal(typeof res.body.allowClientOverride, 'boolean');
   assert.equal(typeof res.body.ebeeMode, 'boolean');
   assert.equal(typeof res.body.allowEbeeModeOverride, 'boolean');
+  assert.equal(typeof res.body.ghostsReleaseAll, 'boolean');
+  assert.ok(['classic', 'hard', 'insane'].includes(res.body.ghostDifficulty));
 });
 
 test('GET /config/schema describes client-visible config fields', async () => {
   const res = await request(app).get('/config/schema');
   assert.equal(res.status, 200);
+  assert.equal(res.body.fields.ghostsReleaseAll.env, 'GHOSTS_RELEASE_ALL');
+  assert.equal(res.body.fields.ghostDifficulty.env, 'GHOST_DIFFICULTY');
   assert.equal(res.body.fields.maxLevel.env, 'MAX_LEVEL');
   assert.equal(res.body.fields.ebeeMode.env, 'EBEE_MODE');
   assert.equal(res.body.config.maxLevel, 10);

@@ -145,6 +145,15 @@ const schema = z.object({
   EBEE_MODE: boolish.default(false),
   ALLOW_CLIENT_EBEE_MODE_OVERRIDE: boolish.default(true),
 
+  // Ghost behaviour. Both are server-authoritative (no client override) so a
+  // lab or demo can guarantee every player faces the same ghosts.
+  // GHOSTS_RELEASE_ALL lets all four ghosts leave the ghost house immediately;
+  // by default Inky waits for level 3 + 30 pills and Clyde for level 4 + 2/3
+  // of the pills. GHOST_DIFFICULTY scales ghost speed, scatter/chase timing and
+  // power-pill duration; "classic" keeps the original behaviour.
+  GHOSTS_RELEASE_ALL: boolish.default(false),
+  GHOST_DIFFICULTY: z.enum(['classic', 'hard', 'insane']).default('classic'),
+
   // Live stats are activity-based. A session disappears after this many
   // seconds without a stats update.
   LIVE_STATS_MAX_AGE_SECONDS: z.coerce.number().int().positive().default(300),

@@ -109,3 +109,32 @@ test('TRUST_PROXY normalizes mixed-case Express range aliases before app initial
   const mixed = runWithEnv({ TRUST_PROXY: 'LoopBack,UniQueLocal,10.0.0.0/8' }, appTrustProxyScript);
   assert.deepEqual(mixed.trustProxy, ['loopback', 'uniquelocal', '10.0.0.0/8']);
 });
+
+const ghostConfigScript = `
+import { config } from './src/config/index.js';
+import { getClientConfig } from './src/routes/client-config.js';
+process.stdout.write(JSON.stringify({
+  releaseAll: config.GHOSTS_RELEASE_ALL,
+  difficulty: config.GHOST_DIFFICULTY,
+  client: getClientConfig(),
+}));
+`;
+
+test('ghost settings default to the classic behaviour', () => {
+  const out = runWithEnv({ GHOSTS_RELEASE_ALL: '', GHOST_DIFFICULTY: undefined }, ghostConfigScript);
+  assert.equal(out.releaseAll, false);
+  assert.equal(out.difficulty, 'classic');
+  assert.equal(out.client.ghostsReleaseAll, false);
+  assert.equal(out.client.ghostDifficulty, 'classic');
+});
+
+test('GHOSTS_RELEASE_ALL and GHOST_DIFFICULTY are exposed through the client config', () => {
+  const out = runWithEnv({ GHOSTS_RELEASE_ALL: 'true', GHOST_DIFFICULTY: 'hard' }, ghostConfigScript);
+  assert.equal(out.releaseAll, true);
+  assert.equal(out.client.ghostsReleaseAll, true);
+  assert.equal(out.client.ghostDifficulty, 'hard');
+});
+
+test('an unknown GHOST_DIFFICULTY fails fast at startup', () => {
+  assert.throws(() => runWithEnv({ GHOST_DIFFICULTY: 'nightmare' }, ghostConfigScript), /Invalid environment configuration/);
+});
