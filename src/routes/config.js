@@ -42,6 +42,18 @@ export function configRouter() {
           default: true,
           description: 'Allows browsers to store a local eBee-mode theme override.',
         },
+        ghostsReleaseAll: {
+          env: 'GHOSTS_RELEASE_ALL',
+          type: 'boolean',
+          default: false,
+          description: 'Releases all four ghosts from the ghost house immediately instead of Inky at level 3 and Clyde at level 4.',
+        },
+        ghostDifficulty: {
+          env: 'GHOST_DIFFICULTY',
+          type: '"classic" | "hard" | "insane"',
+          default: 'classic',
+          description: 'Scales ghost speed, scatter/chase timing, and power-pill duration. Server-authoritative.',
+        },
         liveStatsMaxAgeSeconds: {
           env: 'LIVE_STATS_MAX_AGE_SECONDS',
           type: 'positive integer',

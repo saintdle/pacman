@@ -128,7 +128,7 @@ See [`.env.example`](.env.example) for the full set of variables.
 | GET    | `/readyz/details`    | Readiness plus DB, upstream deps, and config details          |
 | GET    | `/version`           | Role, version, variant, commit, database, dependency map      |
 | GET    | `/metrics`           | Prometheus text metrics (requests, DB ops, upstream latency)  |
-| GET    | `/config`            | Client-visible config (`maxLevel`, eBee mode, override flags) |
+| GET    | `/config`            | Client-visible config (`maxLevel`, eBee mode, ghost settings, override flags) |
 | GET    | `/config/schema`     | Client-visible config fields and env mappings                 |
 | POST   | `/config`            | Validate/authorise a client config override                   |
 | GET    | `/highscores/list`   | High scores; accepts `page`, `pageSize`, and `includeSimulated` |
@@ -312,6 +312,46 @@ The browser loads `public/js/movement.js` synchronously. To regenerate the six
 instruction screenshots (normal and eBee themes), run
 `node tools/generate-instruction-screenshots.js`; the command uses the current
 maze and sprite rules.
+
+### Ghost behaviour
+
+Two server-side settings control the ghosts. They are server-authoritative:
+there is no Settings page override, so every player in a lab or demo faces the
+same ghosts. Both are exposed through `GET /config` as `ghostsReleaseAll` and
+`ghostDifficulty`.
+
+| Variable | Default | Effect |
+| -------- | ------- | ------ |
+| `GHOSTS_RELEASE_ALL` | `false` | `true` lets all four ghosts leave the ghost house immediately. By default Inky waits for level 3 and 30 pills eaten, and Clyde waits for level 4 and two thirds of the pills eaten, so levels 1-2 only have two chasing ghosts. |
+| `GHOST_DIFFICULTY` | `classic` | `classic`, `hard`, or `insane`. Any other value fails startup. |
+
+| `GHOST_DIFFICULTY` | Ghost speed | Scatter / chase (frames) | Power pill (frames) | Scatter/chase starts |
+| ------------------ | ----------- | ------------------------ | ------------------- | -------------------- |
+| `classic` | 2 | 200 / 650 | 240 | level 2 |
+| `hard` | 2, then 3 from level 5 | 120 / 900 | 180 | level 1 |
+| `insane` | 3, then 5 from level 3 | 60 / 1500 | 120 | level 1 |
+
+`classic` reproduces the historical behaviour exactly. Pac-Man moves at speed
+5, so `insane` ghosts are as fast as the player once they reach speed 5.
+Speeds must divide the 30 px grid, so they are presets rather than a free
+number.
+
+```bash
+GHOSTS_RELEASE_ALL=true GHOST_DIFFICULTY=hard npm run dev
+```
+
+In Kubernetes set them on the ConfigMap, or with the chart's `extraEnv`:
+
+```yaml
+extraEnv:
+  - name: GHOSTS_RELEASE_ALL
+    value: "true"
+  - name: GHOST_DIFFICULTY
+    value: hard
+```
+
+The browser reads the values once from `/config`, so changing them needs a pod
+rollout and a page reload.
 
 ### Kubernetes config examples
 

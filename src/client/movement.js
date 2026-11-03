@@ -12,5 +12,8 @@ export const canMoveTo = movement.canMoveTo;
 export const wrapPosition = movement.wrapPosition;
 export const getGhostTarget = movement.getGhostTarget;
 export const chooseGhostDirection = movement.chooseGhostDirection;
+export const GHOST_DIFFICULTIES = movement.GHOST_DIFFICULTIES;
+export const getGhostSettings = movement.getGhostSettings;
+export const ghostMayLeaveHouse = movement.ghostMayLeaveHouse;
 
 export default movement;

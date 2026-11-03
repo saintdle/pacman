@@ -9,6 +9,9 @@ import {
   wrapPosition,
   GRID_WIDTH,
   GRID_HEIGHT,
+  GHOST_DIFFICULTIES,
+  getGhostSettings,
+  ghostMayLeaveHouse,
 } from '../src/client/movement.js';
 
 function makeMap({ walls = [] } = {}) {
@@ -120,4 +123,60 @@ test('canMoveTo respects walls at wrap destination', () => {
   const map = makeMap({ walls: [[5, GRID_HEIGHT - 1]] });
   // Moving up from y=0 column 5 should wrap to y=12 col 5, which is now a wall.
   assert.equal(canMoveTo(map, { x: 5, y: 0 }, UP), false);
+});
+
+test('classic ghost difficulty reproduces the historical timings and speed', () => {
+  for (const level of [1, 4, 5, 9, 12]) {
+    assert.deepEqual(getGhostSettings('classic', level), {
+      speed: 2,
+      scatterFrames: 200,
+      chaseFrames: 650,
+      frightenedFrames: 240,
+      modeSwitchMinLevel: 2,
+    });
+  }
+  assert.deepEqual(getGhostSettings(undefined, 3), getGhostSettings('classic', 3));
+});
+
+test('every ghost difficulty uses a speed that divides the 30px grid', () => {
+  for (const difficulty of GHOST_DIFFICULTIES) {
+    for (let level = 1; level <= 15; level++) {
+      const { speed } = getGhostSettings(difficulty, level);
+      assert.equal(30 % speed, 0, `${difficulty} level ${level} speed ${speed} must divide 30`);
+      assert.ok(speed <= 5, 'ghosts should never be faster than Pac-Man');
+    }
+  }
+});
+
+test('harder ghost difficulties are strictly harder than classic', () => {
+  const classic = getGhostSettings('classic', 5);
+  const hard = getGhostSettings('hard', 5);
+  const insane = getGhostSettings('insane', 5);
+  assert.ok(hard.speed > classic.speed);
+  assert.ok(insane.speed >= hard.speed);
+  assert.ok(hard.scatterFrames < classic.scatterFrames);
+  assert.ok(insane.scatterFrames < hard.scatterFrames);
+  assert.ok(hard.frightenedFrames < classic.frightenedFrames);
+  assert.ok(insane.frightenedFrames < hard.frightenedFrames);
+  assert.equal(hard.modeSwitchMinLevel, 1);
+});
+
+test('ghostMayLeaveHouse keeps the Inky and Clyde conditions by default', () => {
+  const base = { releaseAll: false };
+  assert.equal(ghostMayLeaveHouse({ ...base, name: 'blinky', level: 1, pillCount: 104 }), true);
+  assert.equal(ghostMayLeaveHouse({ ...base, name: 'pinky', level: 1, pillCount: 104 }), true);
+
+  assert.equal(ghostMayLeaveHouse({ ...base, name: 'inky', level: 2, pillCount: 0 }), false);
+  assert.equal(ghostMayLeaveHouse({ ...base, name: 'inky', level: 3, pillCount: 75 }), false);
+  assert.equal(ghostMayLeaveHouse({ ...base, name: 'inky', level: 3, pillCount: 74 }), true);
+
+  assert.equal(ghostMayLeaveHouse({ ...base, name: 'clyde', level: 3, pillCount: 0 }), false);
+  assert.equal(ghostMayLeaveHouse({ ...base, name: 'clyde', level: 4, pillCount: 35 }), false);
+  assert.equal(ghostMayLeaveHouse({ ...base, name: 'clyde', level: 4, pillCount: 34 }), true);
+});
+
+test('ghostMayLeaveHouse releases all four ghosts immediately when releaseAll is set', () => {
+  for (const name of ['blinky', 'pinky', 'inky', 'clyde']) {
+    assert.equal(ghostMayLeaveHouse({ name, level: 1, pillCount: 104, releaseAll: true }), true, name);
+  }
 });

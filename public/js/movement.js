@@ -209,6 +209,58 @@
     return best || currentDirection || directions[0];
   }
 
+  // Ghost difficulty presets. Speeds must divide the 30px grid (1, 2, 3, 5, 6,
+  // 10) or ghosts miss their turns. Pac-Man moves at 5, so 5 is "as fast as
+  // the player". "classic" reproduces the historical behaviour exactly: ghosts
+  // always move at 2, scatter lasts 200 frames, chase 650, power pills 240, and
+  // scatter/chase switching only starts on level 2.
+  var GHOST_DIFFICULTIES = ['classic', 'hard', 'insane'];
+
+  function getGhostSettings(difficulty, level) {
+    var lvl = Number.isInteger(level) && level > 0 ? level : 1;
+    if (difficulty === 'hard') {
+      return {
+        speed: lvl >= 5 ? 3 : 2,
+        scatterFrames: 120,
+        chaseFrames: 900,
+        frightenedFrames: 180,
+        modeSwitchMinLevel: 1,
+      };
+    }
+    if (difficulty === 'insane') {
+      return {
+        speed: lvl >= 3 ? 5 : 3,
+        scatterFrames: 60,
+        chaseFrames: 1500,
+        frightenedFrames: 120,
+        modeSwitchMinLevel: 1,
+      };
+    }
+    return {
+      speed: 2,
+      scatterFrames: 200,
+      chaseFrames: 650,
+      frightenedFrames: 240,
+      modeSwitchMinLevel: 2,
+    };
+  }
+
+  // Whether a ghost still inside the ghost house may leave. Blinky and Pinky
+  // always may; Inky needs level 3 and 30 pills eaten, Clyde needs level 4 and
+  // two thirds of the pills eaten. releaseAll lifts those conditions.
+  var TOTAL_PILLS = 104;
+
+  function ghostMayLeaveHouse(options) {
+    if (options.releaseAll) return true;
+    if (options.name === 'clyde') {
+      return options.level >= 4 && options.pillCount <= TOTAL_PILLS / 3;
+    }
+    if (options.name === 'inky') {
+      return options.level >= 3 && options.pillCount <= TOTAL_PILLS - 30;
+    }
+    return true;
+  }
+
   root.PacmanMovement = {
     GRID_WIDTH: GRID_WIDTH,
     GRID_HEIGHT: GRID_HEIGHT,
@@ -218,5 +270,8 @@
     wrapPosition: wrapPosition,
     getGhostTarget: getGhostTarget,
     chooseGhostDirection: chooseGhostDirection,
+    GHOST_DIFFICULTIES: GHOST_DIFFICULTIES,
+    getGhostSettings: getGhostSettings,
+    ghostMayLeaveHouse: ghostMayLeaveHouse,
   };
 })(globalThis);

@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import '../src/client/movement.js';
 
 const browserSource = readFileSync(new URL('../public/pacman-canvas.js', import.meta.url), 'utf8');
 const mapFixture = JSON.parse(
@@ -117,6 +118,7 @@ function makeBrowserGame({ confirmations = [], prompts = [], deferUserIds = fals
   const ghost = { reset() {}, start() {} };
   const context = vm.createContext({
     $,
+    PacmanMovement: globalThis.PacmanMovement,
     console: { log() {} },
     Date,
     Image: function Image() {},
@@ -422,4 +424,33 @@ test('collecting pills on a nonfinal level still advances to the next level', ()
   assert.equal(game.gameOver, false);
   assert.ok(game.pillCount > 0, 'the next level should load its pill count');
   assert.equal(browser.overlayTitle, 'Level 2');
+});
+
+test('ghost settings follow the server difficulty and level', () => {
+  const { game } = makeBrowserGame();
+
+  game.applyGhostSettings();
+  assert.equal(game.ghostSpeedNormal, 2);
+  assert.equal(game.ghostScatterFrames, 200);
+  assert.equal(game.ghostFrightenedFrames, 240);
+  assert.equal(game.ghostModeSwitchMinLevel, 2);
+
+  game.ghostDifficulty = 'insane';
+  game.level = 3;
+  game.applyGhostSettings();
+  assert.equal(game.ghostSpeedNormal, 5);
+  assert.equal(game.ghostModeSwitchMinLevel, 1);
+  assert.ok(game.ghostFrightenedFrames < 240);
+});
+
+test('init applies ghost difficulty to the scatter timer and starts released ghosts', () => {
+  const { game } = makeBrowserGame();
+  assert.equal(game.ghostsReleaseAll, false);
+
+  game.ghostDifficulty = 'hard';
+  game.ghostsReleaseAll = true;
+  game.init(0);
+
+  assert.equal(game.ghostModeTimer, 120);
+  assert.equal(game.ghostFrightenedTimer, 180);
 });
